@@ -1,13 +1,18 @@
-from datetime import date, datetime
+from fastapi import APIRouter, Depends, HTTPException, Path, Body, Header
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Body, Header
+from schemas.interview import (
+    InterviewRegisterRequest, ContentResponse,
+    ResumeResponse)
+from app.services import supabase_client as db
+
+from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
 from app.models.interviews import Interview
 from app.models.sessions import InterviewSession
-from app.routers.services import auth as svc_auth
+from app.routers.services import supabase_auth as svc_auth
 from app.routers.services import generation as svc_gen
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
@@ -200,85 +205,105 @@ def delete_interview(
 
 
 # ======================= 면접 등록 페이지 ===============================
-# ------------------- (1) 면접 등록 -------------------
-@router.post("/register")
+# ------------------- (1) 면접 등록 ------------------- (+25.11.12 jiwoo)
+@router.post("/register", response_model=InterviewRegisterRequest)
 def register_interview(
-    payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_db),
+    payload: InterviewRegisterRequest,
+    authorization: Optional[str] = Header(None)
 ):
+    
     user_id = _require_user_id(authorization)
 
-    # 필수값 검증
-    required_fields = ["company", "title", "category"]
-    if not all(field in payload and isinstance(payload[field], str) and payload[field].strip() for field in required_fields):
-        raise HTTPException(status_code=400, detail={"message": "invalid_request_body", "detail": "fields company, title, category are required"})
-
-    company = payload["company"].strip()
-    title = payload["title"].strip()
-    category = payload["category"].strip()
-    interview_date = None
-
-    if "interview_date" in payload and payload["interview_date"]:
-        try:
-            interview_date = datetime.strptime(payload["interview_date"], "%Y-%m-%d").date()
-        except Exception:
-            raise HTTPException(status_code=400, detail={"message": "invalid_date_format"})
-
-    # 질문 검증
-    questions = payload.get("questions", [])
-    if not isinstance(questions, list) or len(questions) < 1:
-        raise HTTPException(status_code=400, detail={"message": "invalid_request_body", "detail": "questions must contain at least one item"})
-
-    for q in questions:
-        if "text" not in q or not q["text"].strip():
-            raise HTTPException(status_code=400, detail={"message": "invalid_question_text"})
-        if len(q["text"]) > 1000:
-            raise HTTPException(status_code=413, detail={"message": "payload_too_large", "detail": "Max 1000 chars per question"})
-
-    # 면접 생성
-    interview = Interview(
-        user_id=user_id,
-        company=company,
-        position=title,  # DB 필드명 맞춤 (title -> position)
-        interview_date=interview_date,
-        total_sessions=10,
-        completed_sessions=0,
-    )
-    db.add(interview)
-    db.commit()
-    db.refresh(interview)
-
-    # 질문 저장 로직 (현재는 DB Table 없음, 가상의 반환 리스트로 대체)
-    created_questions = [
-        {
-            "id": idx + 1,
-            "text": q["text"],
-            "prepared_answer": q.get("prepared_answer", ""),
-        }
-        for idx, q in enumerate(questions)
-    ]
-
-    d_day = None
-    if interview_date:
-        d_day = (interview_date - date.today()).days
-
-    return {
-        "message": "interview_created_successfully",
-        "interview": {
-            "id": interview.id,
-            "company": interview.company,
-            "title": interview.position,
-            "category": category,
-            "interview_date": interview.interview_date.isoformat() if interview.interview_date else None,
-            "d_day": d_day,
-            "registered_at": datetime.utcnow().isoformat() + "Z",
-        },
-        "created_questions": created_questions,
+    # 1. content 테이블 저장
+    content_data = {
+        "user_id": user_id,
+        "company": payload.company,
+        "role": payload.role,
+        "role_category": payload.role_category,
+        "interview_date": payload.interview_date.isoformat(),
+        "jd_text": payload.jd_text
     }
 
+    try:
+        created_content = db.create_content(content_data)
+    except Exception as e :
+        raise HTTPException(status_code=500, detail={"message": "failed_to_create_content", "detail": str(e)})
+    
+    
+    if not created_content:
+        raise HTTPException(status_code=500, detail={"message": "failed_to_create_content", "detail": "Content creation returned no data"})
+    
+    # 2. resume 테이블 저장 (여러 개)
+    version = 1 # 초기 데이터
+    resume_data_list = [
+        {
+            "user_id": user_id,
+            "version": version,
+            "question": item.question,
+            "answer": item.answer
+        }
+        for item in payload.resumes
+    ]
+    
+    try:
+        created_resumes = db.create_resumes_bulk(resume_data_list)
+    except Exception as e:
+        # rollback 로직 필요 시 추가 (content 삭제)
+        raise HTTPException(status_code=500, detail={"message": "resume_creation_failed", "detail": str(e)})
+    
+    # 3. 응답 반환
+    return {
+        "message": "interview_created_successfully",
+        "content": ContentResponse(**created_content),
+        "resumes": [ResumeResponse(**r) for r in created_resumes]
+    }
 
-# ------------------- (2) 면접 질문 유형 선택 -------------------
+# ------------------- (2) 자소서 기반 면접 질문 생성  ------------------- (+25.11.12 jiwoo)
+@router.post("/question")
+async def generate_question(
+    payload: dict = Body(..., example={
+        "content_id": 1,
+        "emit_confidence": True,
+        "use_seed": False,
+        "top_k_seed": 0
+    }),
+    authorization: Optional[str] = Header(None)
+):
+    """자소서 기반 면접 질문 생성"""
+    user_id = _require_user_id(authorization)
+
+    # 1. 요청 검증
+    content_id = payload.get("content_id")
+    if not content_id or not isinstance(content_id, int):
+        raise HTTPException(status_code=400, detail={"message": "invalid_request_body", "detail": "content_id is required"})
+
+    # 2. content 소유권 확인
+    content = db.get_content_by_id(content_id)
+    if not content:
+        raise HTTPException(status_code=404, detail={"message": "content_not_found"})
+    if content["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail={"message": "forbidden", "detail": "Not authorized"})
+
+    # 3. content_id로 자소서 데이터 조회
+    resumes = db.get_resumes_by_content(content_id)
+    if not resumes:
+        raise HTTPException(status_code=404, detail={"message": "resumes_not_found", "detail": "No resumes for this content"})
+
+    # 4. OpenAI API 요청 형태로 변환
+    qas = [{"q": r["question"], "a": r["answer"]} for r in resumes]
+
+    openai_payload = {
+        "qas": qas,
+        "emit_confidence": payload.get("emit_confidence", True),
+        "use_seed": payload.get("use_seed", False),
+        "top_k_seed": payload.get("top_k_seed", 0)
+    }
+
+    # 로직 추가
+
+
+
+# ------------------- (3) 면접 질문 유형 선택 -------------------
 @router.post("/{interview_id}/question-plan")
 def create_question_plan(
     interview_id: int,
