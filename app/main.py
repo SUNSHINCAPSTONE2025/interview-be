@@ -10,6 +10,7 @@ from app.routers import records as records_router
 app = FastAPI()
 app.include_router(auth_router.router)
 app.include_router(interviews_router.router)
+app.include_router(records_router.router)
 app.include_router(plans.router,      prefix="/api/interviews", tags=["question-plan"])
 app.include_router(sessions.router,   prefix="/api/sessions",   tags=["sessions"])
 app.include_router(answers.router,    prefix="/api/sessions",   tags=["answers"])  # answers는 세션 하위
@@ -17,10 +18,7 @@ app.include_router(answers.router,    prefix="/api/sessions",   tags=["answers"]
 @app.on_event("startup")
 def on_startup():
     init_db()
-
-app.include_router(interviews_router.router)
-app.include_router(records_router.router)
-app.include_router(auth_router.router)
+    
 
 @app.get("/")
 def root():
