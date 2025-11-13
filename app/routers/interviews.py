@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Body, Header
 from typing import Optional, List
 
-from schemas.interview import (
-    InterviewRegisterRequest, ContentResponse,
-    ResumeResponse)
-from app.services import supabase_client as db
+from app.schemas.interview import (
+    InterviewRegisterRequest,
+    InterviewRegisterResponse,
+    ContentResponse,
+    ResumeResponse
+)
+from app.services.interview_service import InterviewService
+from app.services.interview.generate_interview import GenerateInterviewService
 
 from datetime import date, datetime
 from sqlalchemy.orm import Session
@@ -16,6 +20,10 @@ from app.routers.services import supabase_auth as svc_auth
 from app.routers.services import generation as svc_gen
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
+
+# Service 인스턴스
+interview_service = InterviewService()
+generate_service = GenerateInterviewService()
 
 # ---------- 공용 유틸 ----------
 
@@ -206,56 +214,29 @@ def delete_interview(
 
 # ======================= 면접 등록 페이지 ===============================
 # ------------------- (1) 면접 등록 ------------------- (+25.11.12 jiwoo)
-@router.post("/register", response_model=InterviewRegisterRequest)
+@router.post("/register", response_model=InterviewRegisterResponse, status_code=201)
 def register_interview(
     payload: InterviewRegisterRequest,
     authorization: Optional[str] = Header(None)
 ):
-    
+    """면접 + 자소서 등록"""
     user_id = _require_user_id(authorization)
 
-    # 1. content 테이블 저장
-    content_data = {
-        "user_id": user_id,
-        "company": payload.company,
-        "role": payload.role,
-        "role_category": payload.role_category,
-        "interview_date": payload.interview_date.isoformat(),
-        "jd_text": payload.jd_text
-    }
+    # Service 호출 (비즈니스 로직 위임)
+    content, resumes = interview_service.create_interview_with_resumes(
+        user_id=user_id,
+        company=payload.company,
+        role=payload.role,
+        role_category=payload.role_category,
+        interview_date=payload.interview_date.isoformat(),
+        jd_text=payload.jd_text,
+        resumes=[{"question": r.question, "answer": r.answer} for r in payload.resumes]
+    )
 
-    try:
-        created_content = db.create_content(content_data)
-    except Exception as e :
-        raise HTTPException(status_code=500, detail={"message": "failed_to_create_content", "detail": str(e)})
-    
-    
-    if not created_content:
-        raise HTTPException(status_code=500, detail={"message": "failed_to_create_content", "detail": "Content creation returned no data"})
-    
-    # 2. resume 테이블 저장 (여러 개)
-    version = 1 # 초기 데이터
-    resume_data_list = [
-        {
-            "user_id": user_id,
-            "version": version,
-            "question": item.question,
-            "answer": item.answer
-        }
-        for item in payload.resumes
-    ]
-    
-    try:
-        created_resumes = db.create_resumes_bulk(resume_data_list)
-    except Exception as e:
-        # rollback 로직 필요 시 추가 (content 삭제)
-        raise HTTPException(status_code=500, detail={"message": "resume_creation_failed", "detail": str(e)})
-    
-    # 3. 응답 반환
     return {
         "message": "interview_created_successfully",
-        "content": ContentResponse(**created_content),
-        "resumes": [ResumeResponse(**r) for r in created_resumes]
+        "content": ContentResponse(**content),
+        "resumes": [ResumeResponse(**r) for r in resumes]
     }
 
 # ------------------- (2) 자소서 기반 면접 질문 생성  ------------------- (+25.11.12 jiwoo)
@@ -277,29 +258,24 @@ async def generate_question(
     if not content_id or not isinstance(content_id, int):
         raise HTTPException(status_code=400, detail={"message": "invalid_request_body", "detail": "content_id is required"})
 
-    # 2. content 소유권 확인
-    content = db.get_content_by_id(content_id)
-    if not content:
-        raise HTTPException(status_code=404, detail={"message": "content_not_found"})
-    if content["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail={"message": "forbidden", "detail": "Not authorized"})
+    # 2. 자소서 조회 (InterviewService - 소유권 검증 포함)
+    resumes = interview_service.get_resumes_by_content(user_id, content_id)
 
-    # 3. content_id로 자소서 데이터 조회
-    resumes = db.get_resumes_by_content(content_id)
-    if not resumes:
-        raise HTTPException(status_code=404, detail={"message": "resumes_not_found", "detail": "No resumes for this content"})
+    # 3. OpenAI 형태로 변환
+    qas = interview_service.convert_resumes_to_qas(resumes)
 
-    # 4. OpenAI API 요청 형태로 변환
-    qas = [{"q": r["question"], "a": r["answer"]} for r in resumes]
+    # 4. AI 질문 생성 (GenerateInterviewService)
+    result = await generate_service.generate_from_resume(
+        qas=qas,
+        emit_confidence=payload.get("emit_confidence", True),
+        use_seed=payload.get("use_seed", False),
+        top_k_seed=payload.get("top_k_seed", 0)
+    )
 
-    openai_payload = {
-        "qas": qas,
-        "emit_confidence": payload.get("emit_confidence", True),
-        "use_seed": payload.get("use_seed", False),
-        "top_k_seed": payload.get("top_k_seed", 0)
+    return {
+        "message": "questions_generated",
+        "result": result
     }
-
-    # 로직 추가
 
 
 
