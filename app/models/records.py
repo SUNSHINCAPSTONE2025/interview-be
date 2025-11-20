@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, Date, ForeignKey
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.types import JSON
-from app.models.user import Base  # 같은 Base 공유
+from app.db.base import Base
 
 class PracticeRecord(Base):
     __tablename__ = "practice_records"
