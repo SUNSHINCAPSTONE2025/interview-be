@@ -15,6 +15,8 @@ from sqlalchemy import func
 from app.deps import get_db
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
+from app.routers import auth as svc_auth
+from app.services import generation as svc_gen
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
 
@@ -128,53 +130,26 @@ def list_contents(db: Session = Depends(get_db)):
 def update_progress(
     id: int = Path(..., ge=1),
     progress: int = Path(..., ge=0, le=100),
-    payload: dict = Body(
-        ...,
-        examples={
-            "default": {
-                "summary": "완료 세션 수로 진행률 업데이트 예시",
-                "value": {"completed_sessions": 5},
-            }
-        },
-    ),
+    payload: dict = Body(..., example={"completed_sessions": 5}),
     db: Session = Depends(get_db),
 ):
     i: Optional[Interview] = db.query(Interview).get(id)
     if not i:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "interview_not_found",
-                "detail": "The interview with the specified ID does not exist",
-            },
-        )
+        raise HTTPException(status_code=404, detail={"message": "interview_not_found",
+                                                     "detail": "The interview with the specified ID does not exist"})
 
     # body 유효성 검사
-    if "completed_sessions" not in payload or not isinstance(
-        payload["completed_sessions"], int
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_progress_value",
-                "detail": "completed_sessions must be an integer",
-            },
-        )
+    if "completed_sessions" not in payload or not isinstance(payload["completed_sessions"], int):
+        raise HTTPException(status_code=400, detail={"message": "invalid_progress_value",
+                                                     "detail": "completed_sessions must be an integer"})
     new_completed = payload["completed_sessions"]
     if new_completed < 0 or new_completed > i.total_sessions:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_progress_value",
-                "detail": "completed_sessions must be between 0 and total_sessions",
-            },
-        )
+        raise HTTPException(status_code=400, detail={"message": "invalid_progress_value",
+                                                     "detail": "completed_sessions must be between 0 and total_sessions"})
 
     # 업데이트
     i.completed_sessions = new_completed
-    db.add(i)
-    db.commit()
-    db.refresh(i)
+    db.add(i); db.commit(); db.refresh(i)
 
     # 실제 진행률을 계산(경로의 {progress}와 불일치해도 계산값을 기준으로 응답)
     computed_progress = _calc_progress(i.completed_sessions, i.total_sessions)
@@ -220,18 +195,8 @@ def start_session(id: int, db: Session = Depends(get_db)):
                 "detail": "The interview with the specified ID does not exist",
             },
         )
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "interview_not_found",
-                "detail": "The interview with the specified ID does not exist",
-            },
-        )
 
     s = InterviewSession(interview_id=i.id, status="ongoing")
-    db.add(s)
-    db.commit()
-    db.refresh(s)
     db.add(s)
     db.commit()
     db.refresh(s)
@@ -268,12 +233,6 @@ def list_user_interviews(
         .order_by(Interview.id.desc())
         .all()
     )
-    items = (
-        db.query(Interview)
-        .filter(Interview.user_id == user_id)
-        .order_by(Interview.id.desc())
-        .all()
-    )
     if not items:
         raise HTTPException(
             status_code=404, detail={"message": "interviews_not_found"}
@@ -289,7 +248,7 @@ def update_interview(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    user_id = str(current_user["id"])
+    token_uid = _require_user_id(authorization)
 
     # i: Optional[Interview] = db.query(Interview).get(id)
     i = db.get(Interview, id)
@@ -329,13 +288,7 @@ def update_interview(
             i.interview_date = datetime.strptime(
                 payload["interview_date"], "%Y-%m-%d"
             ).date()
-            i.interview_date = datetime.strptime(
-                payload["interview_date"], "%Y-%m-%d"
-            ).date()
         except Exception:
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_interview_date"}
-            )
             raise HTTPException(
                 status_code=400, detail={"message": "invalid_interview_date"}
             )
@@ -368,10 +321,10 @@ def update_interview(
 @router.delete("/{id}", tags=["mypage"])
 def delete_interview(
     id: int,
-    current_user=Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    user_id = str(current_user["id"])
+    token_uid = _require_user_id(authorization)
 
     # i: Optional[Interview] = db.query(Interview).get(id)
     i = db.get(Interview, id)
@@ -388,8 +341,6 @@ def delete_interview(
 
     db.delete(i)
     db.commit()
-    db.delete(i)
-    db.commit()
     return {"message": "interview_deleted_successfully"}
 
 
@@ -398,10 +349,10 @@ def delete_interview(
 @router.post("/contents", tags=["interviews"])
 def create_content(
     payload: dict = Body(...),
-    current_user=Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    user_id = str(current_user["id"])
+    user_id = _require_user_id(authorization)
 
     # 필수값 검증
     if (
@@ -441,9 +392,6 @@ def create_content(
     interview_date = None
     if payload.get("interview_date"):
         try:
-            interview_date = datetime.strptime(
-                payload["interview_date"], "%Y-%m-%d"
-            ).date()
             interview_date = datetime.strptime(
                 payload["interview_date"], "%Y-%m-%d"
             ).date()
@@ -586,11 +534,10 @@ def create_resume(
 def create_question_plan(
     interview_id: int,
     payload: dict = Body(...),
-    current_user=Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    user_id = str(current_user["id"])
-
+    user_id = _require_user_id(authorization)
     i = db.query(Interview).get(interview_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
@@ -614,22 +561,8 @@ def create_question_plan(
                 "detail": "mode must be one of ['tech','soft','both']",
             },
         )
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_body",
-                "detail": "mode must be one of ['tech','soft','both']",
-            },
-        )
 
     if not isinstance(count, int) or not (1 <= count <= 10):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_body",
-                "detail": "count must be between 1 and 10",
-            },
-        )
         raise HTTPException(
             status_code=400,
             detail={
@@ -690,15 +623,7 @@ def preview_question_plan(
                 "detail": "mode must be one of ['tech','soft','both']",
             },
         )
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_query",
-                "detail": "mode must be one of ['tech','soft','both']",
-            },
-        )
 
-    # 여기서는 단순히 미리보기용 plan만 반환 (레이트리밋 제거)
     plan = {
         "mode": mode,
         "goal_id": f"goal_{mode}_focus",
@@ -752,22 +677,7 @@ def start_generation_session(
                 "detail": "Provide one of ['tech','soft','both'] as mode",
             },
         )
-    if mode not in ["tech", "soft", "both"]:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_body",
-                "detail": "Provide one of ['tech','soft','both'] as mode",
-            },
-        )
     if not isinstance(count, int) or not (1 <= count <= 10):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_body",
-                "detail": "count must be 1~10",
-            },
-        )
         raise HTTPException(
             status_code=400,
             detail={
@@ -787,21 +697,7 @@ def start_generation_session(
                     "detail": "questions must be a list",
                 },
             )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": "invalid_request_body",
-                    "detail": "questions must be a list",
-                },
-            )
         if len(questions) > 100:
-            raise HTTPException(
-                status_code=413,
-                detail={
-                    "message": "payload_too_large",
-                    "detail": "Max 100 questions",
-                },
-            )
             raise HTTPException(
                 status_code=413,
                 detail={
@@ -811,15 +707,7 @@ def start_generation_session(
             )
         for q in questions:
             txt = (q or {}).get("text", "").strip()
-            txt = (q or {}).get("text", "").strip()
             if not txt:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "message": "invalid_request_body",
-                        "detail": "question.text is required",
-                    },
-                )
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -835,19 +723,9 @@ def start_generation_session(
                         "detail": "Each question.text ≤ 1000 chars",
                     },
                 )
-                raise HTTPException(
-                    status_code=413,
-                    detail={
-                        "message": "payload_too_large",
-                        "detail": "Each question.text ≤ 1000 chars",
-                    },
-                )
 
     # 세션 생성(DB) + 실행 마킹
     sess = InterviewSession(interview_id=i.id, status="ongoing")
-    db.add(sess)
-    db.commit()
-    db.refresh(sess)
     db.add(sess)
     db.commit()
     db.refresh(sess)
@@ -863,6 +741,5 @@ def start_generation_session(
         "session_id": session_id,
         "generation_id": generation_id,
         "status": "pending",
-        "estimated_duration_minutes": estimated_minutes,
+        "estimated_duration_minutes": svc_gen.estimated_minutes(),
     }
-

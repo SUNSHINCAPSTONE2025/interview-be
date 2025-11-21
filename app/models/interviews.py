@@ -10,7 +10,6 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import relationship
-
 from app.models.user_profile import Base
 
 
