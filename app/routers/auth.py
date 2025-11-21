@@ -1,4 +1,5 @@
 # app/routers/auth.py
+# "내 정보 보기 / 프로필 수정 / 로그아웃" 같은 Auth 관련 API 엔드포인트
 from datetime import datetime
 from typing import Literal
 
@@ -32,23 +33,27 @@ def _guard_blocked(profile: UserProfile):
         raise HTTPException(status_code=403, detail="account_blocked")
 
 # ---------- Endpoints ----------
-@router.get("/me", response_model=MeOut, response_model_exclude_none=True)
-def me(user=Depends(get_current_user)):
-    """
-    현재 로그인한 사용자 정보 조회.
-    - 인증: Supabase Access Token (Authorization: Bearer <token>)
-    - 반환: auth.users.id(=id), email(토큰 클레임), user_profiles의 표시명/상태/타임스탬프
-    """
-    profile: UserProfile = user["profile"]
-    _guard_blocked(profile)
-    return MeOut(
-        id=user["id"],
-        email=user["email"],
-        display_name=profile.display_name,
-        status=profile.status,
-        created_at=getattr(profile, "created_at", None),
-        updated_at=getattr(profile, "updated_at", None),
-    )
+# @router.get("/me", response_model=MeOut, response_model_exclude_none=True)
+# def me(user=Depends(get_current_user)):
+#     """
+#     현재 로그인한 사용자 정보 조회.
+#     - 인증: Supabase Access Token (Authorization: Bearer <token>)
+#     - 반환: auth.users.id(=id), email(토큰 클레임), user_profiles의 표시명/상태/타임스탬프
+#     """
+#     profile: UserProfile = user["profile"]
+#     _guard_blocked(profile)
+#     return MeOut(
+#         id=user["id"],
+#         email=user["email"],
+#         display_name=profile.display_name,
+#         status=profile.status,
+#         created_at=getattr(profile, "created_at", None),
+#         updated_at=getattr(profile, "updated_at", None),
+#     )
+
+@router.get("/me")
+async def me(current_user = Depends(get_current_user)):
+    return current_user
 
 @router.patch("/profile", response_model=MeOut, response_model_exclude_none=True)
 def update_profile(

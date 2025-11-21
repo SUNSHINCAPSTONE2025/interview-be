@@ -15,31 +15,25 @@ def get_db():
     finally:
         db.close()
 
+# app/deps.py
 async def get_current_user(
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
-    """
-    - Supabase Access Token(JWT)을 검증
-    - 첫 접근이면 user_profiles(id=auth.users.id) 를 생성
-    - 이후 라우터에서 user["id"], user["email"], user["profile"] 사용
-    """
     try:
         claims = await verify_bearer(authorization)
-        # claims: {"user_id": <uuid string>, "email": <str|None>}
     except Exception as e:
-        # 세부 오류는 굳이 노출하지 않음
-        raise HTTPException(status_code=401, detail="unauthorized") from e
+        print("verify_bearer failed >>>", repr(e))
+        raise HTTPException(status_code=401, detail="unauthorized")
 
-    # upsert profile (없으면 생성)
     prof = db.get(UserProfile, claims["user_id"])
     if prof is None:
         prof = UserProfile(id=claims["user_id"], status="active")
         db.add(prof)
-        db.flush()  # id는 이미 있으니 flush로 OK
+        db.flush()
 
     return {
-        "id": claims["user_id"],          # = auth.users.id (uuid)
+        "id": claims["user_id"],
         "email": claims.get("email"),
-        "profile": prof,                  # SQLAlchemy 객체
+        "profile": prof,
     }

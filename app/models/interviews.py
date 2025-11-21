@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 # ▶ user.py에서 선언한 Base를 재사용(같은 메타데이터로 테이블 생성)
-from app.models.user import Base
+from app.db.base import Base
 
 class Interview(Base):
     __tablename__ = "interviews"

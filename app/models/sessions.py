@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
-from app.models.user import Base
+from app.db.base import Base
 
 class InterviewSession(Base):
     __tablename__ = "interview_sessions"
