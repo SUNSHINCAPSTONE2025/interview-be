@@ -3,6 +3,8 @@
 /workspace.xml
 .idea/
 venv/
+.venv/
 .env
+env/
 __pycache__/
 *.pyc

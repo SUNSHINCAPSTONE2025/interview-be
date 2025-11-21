@@ -52,7 +52,15 @@ def list_interviews(db: Session = Depends(get_db)):
 def update_progress(
     id: int = Path(..., ge=1),
     progress: int = Path(..., ge=0, le=100),
-    payload: dict = Body(..., example={"completed_sessions": 5}),
+    payload: dict = Body(
+        ...,
+        examples={
+            "default": {
+                "summary": "완료 세션 수로 진행률 업데이트 예시",
+                "value": {"completed_sessions": 5},
+            }
+        },
+    ),
     db: Session = Depends(get_db),
 ):
     i: Optional[Interview] = db.query(Interview).get(id)
@@ -186,10 +194,15 @@ def update_interview(
     id: int,
     payload: dict = Body(
         ...,
-        example={
-            "company": "카카오",
-            "position": "백엔드 개발자",
-            "interview_date": "2024-01-30",
+        examples={
+            "default": {
+                "summary": "면접 정보 수정 예시",
+                "value": {
+                    "company": "카카오",
+                    "position": "백엔드 개발자",
+                    "interview_date": "2024-01-30",
+                },
+            }
         },
     ),
     current_user=Depends(get_current_user),
@@ -490,24 +503,33 @@ def preview_question_plan(
     return {"message": "plan_preview", "plan": plan}
 
 
-
 # ------------------- 면접 질문 생성 + 세션 시작 -------------------
 @router.post("/{interview_id}/sessions/start", status_code=202)
 def start_generation_session(
     interview_id: int,
     payload: dict = Body(
         ...,
-        example={
-            "mode": "tech",
-            "count": 5,
-            "language": "ko",
-            "use_saved_context": True,
-            "override_context": {
-                "questions": [{"text": "자기소개를 해주세요.", "prepared_answer": "..."}]
-            },
-            "selected_mode": "tech",
-            "temperature": 0.7,
-            "seed": None,
+        examples={
+            "default": {
+                "summary": "질문 생성 및 세션 시작 요청 예시",
+                "value": {
+                    "mode": "tech",
+                    "count": 5,
+                    "language": "ko",
+                    "use_saved_context": True,
+                    "override_context": {
+                        "questions": [
+                            {
+                                "text": "자기소개를 해주세요.",
+                                "prepared_answer": "...",
+                            }
+                        ]
+                    },
+                    "selected_mode": "tech",
+                    "temperature": 0.7,
+                    "seed": None,
+                },
+            }
         },
     ),
     current_user=Depends(get_current_user),

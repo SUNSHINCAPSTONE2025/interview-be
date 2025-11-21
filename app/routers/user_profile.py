@@ -1,8 +1,9 @@
 # app/routers/user_profile.py
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
@@ -16,16 +17,13 @@ class UserProfileOut(BaseModel):
     id: str
     display_name: Optional[str] = None
     status: str
-    profile_meta: Dict[str, Any] = {}
-
-    class Config:
-        orm_mode = True
+    profile_meta: Dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserProfileUpdate(BaseModel):
     display_name: Optional[str] = None
-    # status도 프론트에서 바꾸고 싶으면 열어두기
-    status: Optional[str] = None
+    status: Optional[str] = None      # 필요하면 Literal로 제한 가능
     profile_meta: Optional[Dict[str, Any]] = None
 
 
@@ -58,5 +56,5 @@ async def update_my_profile(
     if payload.profile_meta is not None:
         prof.profile_meta = payload.profile_meta
 
-    db.add(prof)   # get_db가 함수 끝난 뒤 commit 해줌
+    db.add(prof)  # get_db가 함수 끝난 뒤 commit 해줌
     return prof
