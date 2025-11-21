@@ -1,14 +1,10 @@
-# 설정 모듈
-# 환경 변수에서 시크릿키/토큰만료/레이트리밋 값 등을 로드해 전역 설정으로 제공
-from pydantic import BaseSettings
+from dotenv import load_dotenv
+import os
 
-class Settings(BaseSettings):
-    app_env: str = "local"
-    aws_region: str | None = None
-    aws_s3_bucket: str | None = None
-    openai_api_key: str | None = None
+load_dotenv()  # .env 읽기
 
-    class Config:
-        env_file = ".env"
-
-settings = Settings()
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL")
+SUPABASE_ISSUER = os.getenv("SUPABASE_ISSUER")
+SUPABASE_JWT_AUDIENCE = os.getenv("SUPABASE_JWT_AUDIENCE")
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY")
