@@ -3,8 +3,8 @@ import os
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from app.core.config import DATA_DIR
-from app.services.expression import analyze_expression_video
+from app.config import DATA_DIR
+from app.services.expression_analysis import analyze_expression_video
 
 router = APIRouter(
     prefix="/api/feedback",

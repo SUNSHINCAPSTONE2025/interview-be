@@ -6,11 +6,8 @@ import numpy as np
 import cv2
 import mediapipe as mp
 
-router = APIRouter(prefix="/api/feedback", tags=["Expression Feedback"])
-
 
 # 설정
-DATA_DIR = os.getenv("SESSION_VIDEO_DIR", "data") 
 GAZE_OFF_ABS = 0.12         
 EYE_OFF_ABS  = 0.35         
 BLINK_RATIO = 0.75          
