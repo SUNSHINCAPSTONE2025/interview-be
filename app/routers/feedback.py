@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.deps import get_db
-from app.services.expression_analysis import run_expression_analysis_for_session
+from app.services.face_analysis import run_expression_analysis_for_session
 
 router = APIRouter(
     prefix="/api/feedback",
