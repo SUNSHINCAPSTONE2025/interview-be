@@ -2,7 +2,7 @@
 from fastapi import Header, HTTPException, Depends
 from sqlalchemy.orm import Session
 from app.db.base import SessionLocal
-from app.services.supabase_auth import verify_bearer
+from app.services.supa_auth import verify_bearer
 from app.models.user_profile import UserProfile
 
 def get_db():
