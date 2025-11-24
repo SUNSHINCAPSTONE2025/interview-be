@@ -1,4 +1,4 @@
-# app/services/supabase_auth.py
+# app/services/supa_auth.py
 import os
 from typing import Dict
 from jose import jwt, JWTError

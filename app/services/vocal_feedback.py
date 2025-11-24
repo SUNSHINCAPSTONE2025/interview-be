@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
@@ -26,6 +26,7 @@ class TremorThreshold:
     penalty_step: int = 3
     floor: int = 40
 
+
 @dataclass
 class SpeedThreshold:
     syll_per_word: float = 2.25  # sps -> wpm conversion (KO default)
@@ -40,12 +41,14 @@ class SpeedThreshold:
     edge2_min: int = 186
     edge2_max: int = 200
 
+
 @dataclass
 class PauseThreshold:
     # When using structured input: median pause_ratio bands
     med_good: float = 0.18
     med_mid: float = 0.25
     med_warn: float = 0.35
+
 
 @dataclass
 class Weights:
@@ -54,12 +57,15 @@ class Weights:
     tone: float = 0.25
     speed: float = 0.25
 
+
 @dataclass
 class Config:
-    tremor: TremorThreshold = TremorThreshold()
-    speed: SpeedThreshold = SpeedThreshold()
-    pause: PauseThreshold = PauseThreshold()
-    weights: Weights = Weights()
+    # 🔧 dataclass 안에서 다른 dataclass 인스턴스를 기본값으로 두지 말고
+    # field(default_factory=...) 로 새로 생성되게 한다.
+    tremor: TremorThreshold = field(default_factory=TremorThreshold)
+    speed: SpeedThreshold = field(default_factory=SpeedThreshold)
+    pause: PauseThreshold = field(default_factory=PauseThreshold)
+    weights: Weights = field(default_factory=Weights)
 
 
 # =========================
@@ -77,6 +83,7 @@ def _median(vals: List[float]) -> Optional[float]:
         return float(vs[mid])
     return float((vs[mid - 1] + vs[mid]) / 2.0)
 
+
 def _clamp_int(x: float, lo: int, hi: int) -> int:
     return int(max(lo, min(hi, round(x))))
 
@@ -84,7 +91,10 @@ def _clamp_int(x: float, lo: int, hi: int) -> int:
 # =========================
 # Scoring (structured input)
 # =========================
-def _score_tremor_struct(tremor: Dict[str, Any], cfg: Config) -> Tuple[Optional[Dict[str, Any]], int, str]:
+def _score_tremor_struct(
+    tremor: Dict[str, Any],
+    cfg: Config,
+) -> Tuple[Optional[Dict[str, Any]], int, str]:
     rows = (tremor or {}).get("timeline", [])
     if not rows:
         return None, 0, "정보부족"
@@ -115,18 +125,28 @@ def _score_tremor_struct(tremor: Dict[str, Any], cfg: Config) -> Tuple[Optional[
         base, level = 55, "주의"
 
     score = base
-    if (stats["jitter_pct"] or 0) > th.jitter_penalty_thr: score -= th.penalty_step
-    if (stats["shimmer_pct"] or 0) > th.shimmer_penalty_thr: score -= th.penalty_step
-    if (stats["hnr_db"] is not None) and stats["hnr_db"] < th.hnr_penalty_thr: score -= th.penalty_step
+    if (stats["jitter_pct"] or 0) > th.jitter_penalty_thr:
+        score -= th.penalty_step
+    if (stats["shimmer_pct"] or 0) > th.shimmer_penalty_thr:
+        score -= th.penalty_step
+    if (stats["hnr_db"] is not None) and stats["hnr_db"] < th.hnr_penalty_thr:
+        score -= th.penalty_step
     score = _clamp_int(score, th.floor, 100)
     return stats, score, level
 
 
-def _score_speed_struct(sp_tl: Dict[str, Any], cfg: Config) -> Tuple[Optional[Dict[str, Any]], int, str]:
+def _score_speed_struct(
+    sp_tl: Dict[str, Any],
+    cfg: Config,
+) -> Tuple[Optional[Dict[str, Any]], int, str]:
     rows = (sp_tl or {}).get("timeline", [])
     if not rows:
         return None, 0, "정보부족"
-    sps = [r.get("speaking_rate_sps") for r in rows if r.get("speaking_rate_sps") is not None]
+    sps = [
+        r.get("speaking_rate_sps")
+        for r in rows
+        if r.get("speaking_rate_sps") is not None
+    ]
     if not sps:
         return None, 0, "정보부족"
 
@@ -146,7 +166,10 @@ def _score_speed_struct(sp_tl: Dict[str, Any], cfg: Config) -> Tuple[Optional[Di
     return {"sps": round(sps_avg, 2), "wpm": int(wpm)}, score, level
 
 
-def _score_pause_struct(sp_tl: Dict[str, Any], cfg: Config) -> Tuple[Dict[str, Any], int, str]:
+def _score_pause_struct(
+    sp_tl: Dict[str, Any],
+    cfg: Config,
+) -> Tuple[Dict[str, Any], int, str]:
     rows = (sp_tl or {}).get("timeline", [])
     if not rows:
         return {"status": "정보부족"}, 80, "보통"
@@ -165,7 +188,12 @@ def _score_pause_struct(sp_tl: Dict[str, Any], cfg: Config) -> Tuple[Dict[str, A
     return {"status": "과다", "avg": p_med}, 62, "과다"
 
 
-def _build_summary(t_level: str, s_level: str, p_level: str, tone_label: Optional[str]) -> str:
+def _build_summary(
+    t_level: str,
+    s_level: str,
+    p_level: str,
+    tone_label: Optional[str],
+) -> str:
     bits: List[str] = []
     if t_level in ("양호", "약간"):
         bits.append("전반적으로 안정적")
@@ -184,31 +212,35 @@ def build_payload_from_structures(
     tremor: Dict[str, Any],
     sp_tl: Dict[str, Any],
     tone: Dict[str, Any],
-    cfg: Config = Config(),
+    cfg: Optional[Config] = None,
 ) -> Dict[str, Any]:
     """
     Args:
         tremor: dict with 'timeline' list (each item may include tremor_score, jitter_pct, shimmer_pct, hnr_db)
         sp_tl:  dict with 'timeline' list (each item may include speaking_rate_sps, pause_ratio, ...)
         tone:   dict with 'tone_score' (0-100), 'label', and optional drivers
-        cfg:    Config
+        cfg:    Config (없으면 기본 Config() 사용)
     Returns:
         Frontend-ready payload dict: { total_score, summary, metrics: [ ... ] }
     """
+    if cfg is None:
+        cfg = Config()
+
     t_stats, t_score, t_level = _score_tremor_struct(tremor, cfg)
     s_stats, s_score, s_level = _score_speed_struct(sp_tl, cfg)
-    p_info,  p_score, p_level = _score_pause_struct(sp_tl, cfg)
+    p_info, p_score, p_level = _score_pause_struct(sp_tl, cfg)
 
     tone_score = int(tone.get("tone_score", 0))
     tone_label = tone.get("label")
 
     w = cfg.weights
     total = _clamp_int(
-        w.tremor * t_score +
-        w.pause  * p_score +
-        w.tone   * tone_score +
-        w.speed  * s_score,
-        0, 100
+        w.tremor * t_score
+        + w.pause * p_score
+        + w.tone * tone_score
+        + w.speed * s_score,
+        0,
+        100,
     )
 
     payload = {
@@ -216,39 +248,58 @@ def build_payload_from_structures(
         "summary": _build_summary(t_level, s_level, p_level, tone_label),
         "metrics": [
             {
-                "id": "tremor", "label": "떨림",
-                "score": t_score, "level": t_level,
-                "value": None, "unit": None,
+                "id": "tremor",
+                "label": "떨림",
+                "score": t_score,
+                "level": t_level,
+                "value": None,
+                "unit": None,
                 "description": (
                     f"최대 z={t_stats['z_max']:.2f}, "
                     f"jitter≈{(t_stats.get('jitter_pct') or 0):.2f}%, "
                     f"shimmer≈{(t_stats.get('shimmer_pct') or 0):.2f}%, "
                     f"HNR≈{(t_stats.get('hnr_db') or 0):.1f} dB"
-                ) if t_stats else "정보 부족",
-                "details": t_stats or {}
+                )
+                if t_stats
+                else "정보 부족",
+                "details": t_stats or {},
             },
             {
-                "id": "pause", "label": "공백",
-                "score": p_score, "level": p_level,
-                "value": p_info.get("avg"), "unit": "ratio",
-                "description": "불필요한 침묵 과다는 없음." if p_level == "양호" else "휴지 개선 필요."
+                "id": "pause",
+                "label": "공백",
+                "score": p_score,
+                "level": p_level,
+                "value": p_info.get("avg"),
+                "unit": "ratio",
+                "description": "불필요한 침묵 과다는 없음."
+                if p_level == "양호"
+                else "휴지 개선 필요.",
             },
             {
-                "id": "tone", "label": "억양",
+                "id": "tone",
+                "label": "억양",
                 "score": min(100, max(0, tone_score)),
                 "level": "양호" if tone_score >= 80 else "보통",
-                "value": tone_label, "unit": None,
-                "description": "억양 변화와 에너지 밸런스가 안정적." if tone_score >= 80 else "억양 개선 여지 있음.",
-                "details": {k: v for k, v in tone.items() if k != "label"}
+                "value": tone_label,
+                "unit": None,
+                "description": "억양 변화와 에너지 밸런스가 안정적."
+                if tone_score >= 80
+                else "억양 개선 여지 있음.",
+                "details": {k: v for k, v in tone.items() if k != "label"},
             },
             {
-                "id": "speed", "label": "속도",
-                "score": s_score, "level": s_level,
-                "value": (s_stats or {}).get("wpm"), "unit": "wpm",
-                "description": "말하기 속도가 빠른 편이나 명료성은 유지." if s_stats else "정보 부족",
-                "details": s_stats or {}
-            }
-        ]
+                "id": "speed",
+                "label": "속도",
+                "score": s_score,
+                "level": s_level,
+                "value": (s_stats or {}).get("wpm"),
+                "unit": "wpm",
+                "description": "말하기 속도가 빠른 편이나 명료성은 유지."
+                if s_stats
+                else "정보 부족",
+                "details": s_stats or {},
+            },
+        ],
     }
     return payload
 
@@ -257,6 +308,7 @@ def build_payload_from_structures(
 # Fallback: console-text parsing path
 # =====================================
 _HEADER_RE = re.compile(r"^=== \[(TREMOR|SPEED|PAUSE|TONE)\][^\n]*$", re.M)
+
 
 def _extract_blocks(raw_text: str) -> Dict[str, str]:
     blocks: Dict[str, str] = {}
@@ -268,16 +320,24 @@ def _extract_blocks(raw_text: str) -> Dict[str, str]:
         blocks[name] = raw_text[start:end].strip()
     return blocks
 
+
 def _parse_tremor_text(block: str) -> Optional[Dict[str, float]]:
     zmax, jit, shm, hnr = [], [], [], []
     for line in block.splitlines():
-        m = re.search(r"z_max\s*=\s*([0-9.]+)", line);        zmax += [float(m.group(1))] if m else []
-        j = re.search(r"jitter~([0-9.]+)%", line);            jit  += [float(j.group(1))] if j else []
-        s = re.search(r"shimmer~([0-9.]+)%", line);           shm  += [float(s.group(1))] if s else []
-        h = re.search(r"HNR~([0-9.]+)\s*dB", line);           hnr  += [float(h.group(1))] if h else []
+        m = re.search(r"z_max\s*=\s*([0-9.]+)", line)
+        zmax += [float(m.group(1))] if m else []
+        j = re.search(r"jitter~([0-9.]+)%", line)
+        jit += [float(j.group(1))] if j else []
+        s = re.search(r"shimmer~([0-9.]+)%", line)
+        shm += [float(s.group(1))] if s else []
+        h = re.search(r"HNR~([0-9.]+)\s*dB", line)
+        hnr += [float(h.group(1))] if h else []
     if not zmax:
         return None
-    def mean(x): return sum(x)/len(x) if x else None
+
+    def mean(x):
+        return sum(x) / len(x) if x else None
+
     return {
         "z_max": max(zmax),
         "jitter_pct": mean(jit),
@@ -285,21 +345,31 @@ def _parse_tremor_text(block: str) -> Optional[Dict[str, float]]:
         "hnr_db": mean(hnr),
     }
 
+
 def _parse_speed_text(block: str, syll_per_word: float) -> Optional[Dict[str, Any]]:
     sps = [float(x) for x in re.findall(r"speaking~([0-9.]+)\s*sps", block)]
     if not sps:
         return None
-    sps_avg = sum(sps)/len(sps)
+    sps_avg = sum(sps) / len(sps)
     wpm = int(round(sps_avg * 60.0 / syll_per_word))
     return {"sps": sps_avg, "wpm": wpm}
+
 
 def _parse_pause_text(block: str) -> Dict[str, Any]:
     if "없음" in block:
         return {"status": "양호"}
     m = re.search(r"평균\s*([0-9.]+)\s*s", block)
-    return {"status": "정보부족", "avg": float(m.group(1))} if m else {"status": "정보부족"}
+    return (
+        {"status": "정보부족", "avg": float(m.group(1))}
+        if m
+        else {"status": "정보부족"}
+    )
 
-def build_payload_from_console_text(raw_text: str, cfg: Config = Config()) -> Dict[str, Any]:
+
+def build_payload_from_console_text(
+    raw_text: str,
+    cfg: Optional[Config] = None,
+) -> Dict[str, Any]:
     """
     Input: console text that includes
       === [TREMOR] ...
@@ -307,32 +377,56 @@ def build_payload_from_console_text(raw_text: str, cfg: Config = Config()) -> Di
       === [PAUSE] ...
       === [TONE] ...
     """
+    if cfg is None:
+        cfg = Config()
+
     blocks = _extract_blocks(raw_text)
     tremor_stats = _parse_tremor_text(blocks.get("TREMOR", ""))
-    speed_stats  = _parse_speed_text(blocks.get("SPEED", ""), cfg.speed.syll_per_word)
-    pause_info   = _parse_pause_text(blocks.get("PAUSE", ""))
+    speed_stats = _parse_speed_text(blocks.get("SPEED", ""), cfg.speed.syll_per_word)
+    pause_info = _parse_pause_text(blocks.get("PAUSE", ""))
 
     # Score by reusing structured scorers with an adapter
     t_score, t_level = 0, "정보부족"
     if tremor_stats:
-        t_stats, t_score, t_level = _score_tremor_struct({"timeline":[
-            {"tremor_score": tremor_stats["z_max"],
-             "jitter_pct": tremor_stats.get("jitter_pct"),
-             "shimmer_pct": tremor_stats.get("shimmer_pct"),
-             "hnr_db": tremor_stats.get("hnr_db")}
-        ]}, cfg)
-        tremor_stats = t_stats
+        t_stats, t_score, t_level = _score_tremor_struct(
+            {
+                "timeline": [
+                    {
+                        "tremor_score": tremor_stats["z_max"],
+                        "jitter_pct": tremor_stats.get("jitter_pct"),
+                        "shimmer_pct": tremor_stats.get("shimmer_pct"),
+                        "hnr_db": tremor_stats.get("hnr_db"),
+                    }
+                ]
+            },
+            cfg,
+        )
+        tremor_stats = t_stats  # type: ignore[assignment]
 
     s_score, s_level = 0, "정보부족"
     if speed_stats:
-        s_stats, s_score, s_level = _score_speed_struct({"timeline":[
-            {"speaking_rate_sps": speed_stats["sps"]}
-        ]}, cfg)
-        speed_stats = s_stats
+        s_stats, s_score, s_level = _score_speed_struct(
+            {
+                "timeline": [
+                    {
+                        "speaking_rate_sps": speed_stats["sps"],
+                    }
+                ]
+            },
+            cfg,
+        )
+        speed_stats = s_stats  # type: ignore[assignment]
 
-    p_info_struct, p_score, p_level = _score_pause_struct({"timeline":[
-        {"pause_ratio": pause_info.get("avg")} if "avg" in pause_info else {}
-    ]}, cfg)
+    p_info_struct, p_score, p_level = _score_pause_struct(
+        {
+            "timeline": [
+                {"pause_ratio": pause_info.get("avg")}
+                if "avg" in pause_info
+                else {}
+            ]
+        },
+        cfg,
+    )
 
     tone_dict: Dict[str, Any]
     if "TONE" in blocks:
@@ -347,34 +441,72 @@ def build_payload_from_console_text(raw_text: str, cfg: Config = Config()) -> Di
     tone_label = tone_dict.get("label")
 
     w = cfg.weights
-    total = _clamp_int(w.tremor * t_score + w.pause * p_score + w.tone * tone_score + w.speed * s_score, 0, 100)
+    total = _clamp_int(
+        w.tremor * t_score
+        + w.pause * p_score
+        + w.tone * tone_score
+        + w.speed * s_score,
+        0,
+        100,
+    )
 
     return {
         "total_score": total,
         "summary": _build_summary(t_level, s_level, p_level, tone_label),
         "metrics": [
-            {"id":"tremor","label":"떨림","score":t_score,"level":t_level,
-             "value":None,"unit":None,
-             "description":(
-                 f"최대 z={tremor_stats['z_max']:.2f}, "
-                 f"jitter≈{(tremor_stats.get('jitter_pct') or 0):.2f}%, "
-                 f"shimmer≈{(tremor_stats.get('shimmer_pct') or 0):.2f}%, "
-                 f"HNR≈{(tremor_stats.get('hnr_db') or 0):.1f} dB"
-             ) if tremor_stats else "정보 부족",
-             "details": tremor_stats or {}},
-            {"id":"pause","label":"공백","score":p_score,"level":p_level,
-             "value":p_info_struct.get("avg"),"unit":"ratio",
-             "description":"불필요한 침묵 과다는 없음." if p_level=="양호" else "휴지 개선 필요."},
-            {"id":"tone","label":"억양",
-             "score":min(100,max(0,tone_score)),"level":"양호" if tone_score>=80 else "보통",
-             "value":tone_label,"unit":None,
-             "description":"억양 변화와 에너지 밸런스가 안정적." if tone_score>=80 else "억양 개선 여지 있음.",
-             "details": {k:v for k,v in tone_dict.items() if k!='label'}},
-            {"id":"speed","label":"속도","score":s_score,"level":s_level,
-             "value":(speed_stats or {}).get("wpm"),"unit":"wpm",
-             "description":"말하기 속도가 빠른 편이나 명료성은 유지." if speed_stats else "정보 부족",
-             "details": speed_stats or {}},
-        ]
+            {
+                "id": "tremor",
+                "label": "떨림",
+                "score": t_score,
+                "level": t_level,
+                "value": None,
+                "unit": None,
+                "description": (
+                    f"최대 z={tremor_stats['z_max']:.2f}, "
+                    f"jitter≈{(tremor_stats.get('jitter_pct') or 0):.2f}%, "
+                    f"shimmer≈{(tremor_stats.get('shimmer_pct') or 0):.2f}%, "
+                    f"HNR≈{(tremor_stats.get('hnr_db') or 0):.1f} dB"
+                )
+                if tremor_stats
+                else "정보 부족",
+                "details": tremor_stats or {},
+            },
+            {
+                "id": "pause",
+                "label": "공백",
+                "score": p_score,
+                "level": p_level,
+                "value": p_info_struct.get("avg"),
+                "unit": "ratio",
+                "description": "불필요한 침묵 과다는 없음."
+                if p_level == "양호"
+                else "휴지 개선 필요.",
+            },
+            {
+                "id": "tone",
+                "label": "억양",
+                "score": min(100, max(0, tone_score)),
+                "level": "양호" if tone_score >= 80 else "보통",
+                "value": tone_label,
+                "unit": None,
+                "description": "억양 변화와 에너지 밸런스가 안정적."
+                if tone_score >= 80
+                else "억양 개선 여지 있음.",
+                "details": {k: v for k, v in tone_dict.items() if k != "label"},
+            },
+            {
+                "id": "speed",
+                "label": "속도",
+                "score": s_score,
+                "level": s_level,
+                "value": (speed_stats or {}).get("wpm"),
+                "unit": "wpm",
+                "description": "말하기 속도가 빠른 편이나 명료성은 유지."
+                if speed_stats
+                else "정보 부족",
+                "details": speed_stats or {},
+            },
+        ],
     }
 
 
