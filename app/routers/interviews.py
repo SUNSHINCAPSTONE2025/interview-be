@@ -130,7 +130,14 @@ def list_contents(db: Session = Depends(get_db)):
 def update_progress(
     id: int = Path(..., ge=1),
     progress: int = Path(..., ge=0, le=100),
-    payload: dict = Body(..., example={"completed_sessions": 5}),
+    payload: dict = Body(...,
+                         examples={
+                             "default": {
+                                 "summary": "진행도 업데이트 예시",
+                                 "value": {"completed_sessions": 5},
+                             }
+                         },
+                    ),
     db: Session = Depends(get_db),
 ):
     i: Optional[Interview] = db.query(Interview).get(id)

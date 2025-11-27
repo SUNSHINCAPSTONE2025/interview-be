@@ -1,10 +1,12 @@
-# app/api/pose_analysis.py
+# app/routers/pose_analysis.py
 # 자세 분석 시작(비동기) + 결과 조회
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from app.api_deps import get_db, get_current_user
-from app.db.models import MediaAsset, FeedbackSummary, InterviewSession
+from app.deps import get_db, get_current_user
+from app.models.sessions import InterviewSession
+from app.models.media_asset import MediaAsset
+from app.models.feedback_summary import FeedbackSummary
 from app.services.pose_model import run_pose_on_video  # 새로 만든 함수
 from app.services.feedback_service import create_or_update_pose_feedback
 import os

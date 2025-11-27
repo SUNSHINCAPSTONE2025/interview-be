@@ -43,16 +43,3 @@ async def get_current_user(
         "email": claims.get("email"),
         "profile": prof,
     }
-
-# ----------------------------
-# 추가 의존성: feat#6 필요 기능
-# ----------------------------
-# 예시: pose 모델
-from app.services.pose_model import PoseModel
-def get_pose_model():
-    return PoseModel()
-
-# 예시: storage service
-from app.services.storage_service import StorageService
-def get_storage_service():
-    return StorageService()

@@ -1,5 +1,5 @@
 # app/services/feedback_service.py
-from app.db.models import FeedbackSummary
+from app.models.feedback_summary import FeedbackSummary
 from sqlalchemy import func
 import numpy as np
 import pandas as pd
