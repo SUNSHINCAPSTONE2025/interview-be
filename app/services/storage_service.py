@@ -1,11 +1,12 @@
 # app/services/storage_service.py
 from supabase import create_client
 import os
+from app.config import settings
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET")   # 예: "videos"
-AUDIO_BUCKET = os.getenv("SUPABASE_AUDIO_BUCKET")   # 예: "audios"
+SUPABASE_URL = settings.supabase_url
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or settings.supabase_anon_key
+VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET")
+AUDIO_BUCKET = os.getenv("SUPABASE_AUDIO_BUCKET")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 

@@ -2,17 +2,23 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
-from app.api_deps import get_db, get_current_user
-from app.db.models import InterviewSession, SessionQuestion, Attempt, MediaAsset
+from app.deps import get_db, get_current_user
+from app.models.session_question import SessionQuestion
+from app.models.sessions import InterviewSession
+from app.models.attempts import Attempt
+from app.models.media_asset import MediaAsset
 from app.services.pose_model import run_pose_on_video
 from app.services.feedback_service import create_or_update_pose_feedback
 from app.services.storage_service import upload_video, upload_audio, get_signed_url
 import os
+from pathlib import Path
 
 router = APIRouter()
 
 # 녹화 파일 저장 폴더
-RECORDINGS_PATH = "./app/recordings"
+BASE_DIR = Path(__file__).resolve().parents[2]  # interview-be/
+APP_DIR = BASE_DIR / "app"
+RECORDINGS_PATH = APP_DIR / "recordings"
 os.makedirs(RECORDINGS_PATH, exist_ok=True)  # 서버 실행 시 자동 생성
 
 @router.post("/api/interviews/{interview_id}/sessions/start")

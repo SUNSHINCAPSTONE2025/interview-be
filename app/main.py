@@ -26,7 +26,7 @@ from app.routers import user_profile as user_profile_router
 # ------------------------
 # feat#6 라우터 import
 # ------------------------
-from app.api import pose_analysis
+from app.routers import pose_analysis
 
 # ------------------------
 # 1) FastAPI 앱 생성
