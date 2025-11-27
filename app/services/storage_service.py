@@ -4,7 +4,7 @@ import os
 from app.config import settings
 
 SUPABASE_URL = settings.supabase_url
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or settings.supabase_anon_key
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET")
 AUDIO_BUCKET = os.getenv("SUPABASE_AUDIO_BUCKET")
 
