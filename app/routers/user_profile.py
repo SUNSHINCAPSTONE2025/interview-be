@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.deps import get_current_user, get_db
 from app.models.user_profile import UserProfile
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api/me", tags=["me"])
 # ---- Pydantic 스키마 ----
 
 class UserProfileOut(BaseModel):
-    id: str
+    id: UUID
     display_name: Optional[str] = None
     status: str
     profile_meta: Dict[str, Any] = Field(default_factory=dict)
