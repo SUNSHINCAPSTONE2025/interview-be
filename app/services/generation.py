@@ -15,7 +15,7 @@ _preview_hits = defaultdict(list)     # key: user_id
 _generate_hits = defaultdict(list)    # key: user_id
 
 # 인터뷰별 동시 실행 방지(간단한 락)
-_running_by_interview = set()         # {interview_id}
+_running_by_content = set()         # {content_id}
 
 def _prune(bucket, window):
     now = time.time()
@@ -33,14 +33,14 @@ def check_generate_rate(user_id: int) -> None:
         raise RuntimeError("rate_limited_generate")
     _generate_hits[user_id].append(time.time())
 
-def is_running(interview_id: int) -> bool:
-    return interview_id in _running_by_interview
+def is_running(content_id: int) -> bool:
+    return content_id in _running_by_content
 
-def mark_running(interview_id: int) -> None:
-    _running_by_interview.add(interview_id)
+def mark_running(content_id: int) -> None:
+    _running_by_content.add(content_id)
 
-def unmark_running(interview_id: int) -> None:
-    _running_by_interview.discard(interview_id)
+def unmark_running(content_id: int) -> None:
+    _running_by_content.discard(content_id)
 
 def new_ids():
     return f"sess_{uuid.uuid4().hex[:6]}", f"gen_{uuid.uuid4().hex[:5]}"
