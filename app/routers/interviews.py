@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 from fastapi import (
     APIRouter,
@@ -357,9 +357,9 @@ def delete_interview(
 def create_content(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
+    current_user: Dict = Depends(get_current_user),
 ):
-    user_id = current_user.id    
+    user_id = current_user["id"]  
 
     # 필수값 검증
     if (

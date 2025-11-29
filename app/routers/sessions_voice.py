@@ -107,7 +107,7 @@ def create_or_update_voice_feedback_endpoint(
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    _get_session_or_404(db, session_id, current_user.id)
+    _get_session_or_404(db, session_id, current_user["id"])
 
     storage_url = _get_audio_storage_url(db, session_id)
 
@@ -135,7 +135,7 @@ def get_voice_feedback_endpoint(
     - summary
     만 간단히 조회
     """
-    _get_session_or_404(db, session_id, current_user.id)
+    _get_session_or_404(db, session_id, current_user["id"])
 
     fs = (
         db.query(FeedbackSummary)
