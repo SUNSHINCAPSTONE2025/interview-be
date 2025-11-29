@@ -15,8 +15,10 @@ from sqlalchemy import func
 from app.deps import get_db
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
+from app.models.generated_question import GeneratedQuestion
 from app.routers import auth as svc_auth
 from app.services import generation as svc_gen
+from app.services import create_question as svc_question
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
 
@@ -637,6 +639,126 @@ def preview_question_plan(
         "tip_ids": ["tip_example", "tip_star", "tip_followup"],
     }
     return {"message": "plan_preview", "plan": plan}
+
+
+# 자소서 기반 면접 질문 생성
+@router.post("/question", tags=["interviews"])
+def create_interview_questions(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    자소서 기반 면접 질문 생성
+
+    Args:
+        payload: 요청 본문
+            - qas: 자소서 Q&A 리스트 (필수)
+            - content_id: 면접 컨텐츠 ID (필수)
+            - emit_confidence: 신뢰도 반환 여부 (사용 미정)
+            - use_seed: seed 사용 여부 (사용 미정)
+            - top_k_seed: top-k seed 값 (사용 미정)
+
+    Returns:
+        생성된 질문 개수와 성공 메시지
+    """
+    user_id = _require_user_id(authorization)
+
+    # 필수 파라미터 검증
+    if "qas" not in payload or not isinstance(payload["qas"], list):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "qas is required and must be a list"
+            }
+        )
+
+    if "content_id" not in payload or not isinstance(payload["content_id"], int):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "content_id is required and must be an integer"
+            }
+        )
+
+    qas = payload["qas"]
+    content_id = payload["content_id"]
+
+    # content 존재 및 권한 확인
+    content = db.get(Interview, content_id)
+    if not content:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "content_not_found"}
+        )
+    if content.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "forbidden",
+                "detail": "User not authorized for this content"
+            }
+        )
+
+    # QA 검증
+    if len(qas) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "qas must contain at least one item"
+            }
+        )
+
+    for qa in qas:
+        if not isinstance(qa, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "invalid_qa_format"}
+            )
+        if "q" not in qa or "a" not in qa:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "invalid_qa_format",
+                    "detail": "Each QA must have 'q' and 'a' fields"
+                }
+            )
+
+    # 질문 생성
+    try:
+        result = svc_question.generate_questions_from_qas(qas)
+        questions = result.get("questions", [])
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "question_generation_failed",
+                "detail": str(e)
+            }
+        )
+
+    # DB에 저장
+    saved_count = 0
+    for q in questions:
+        question_record = GeneratedQuestion(
+            content_id=content_id,
+            type=q.get("type", "job"),
+            text=q.get("text", ""),
+            is_used=False
+        )
+        db.add(question_record)
+        saved_count += 1
+
+    db.commit()
+
+    return {
+        "message": "questions_generated_successfully",
+        "content_id": content_id,
+        "generated_count": saved_count,
+    }
 
 
 # 면접 질문 생성 + 세션 시작
