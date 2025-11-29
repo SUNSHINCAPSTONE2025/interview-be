@@ -1,4 +1,4 @@
-# app/routers/sessions_voice_feedback.py
+# app/routers/sessions_voice.py
 
 from typing import Any, Dict
 
@@ -6,14 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session as OrmSession
 
 from app.deps import get_db, get_current_user
-from app.models.session import Session
+from app.models.sessions import InterviewSession
 from app.models.media_asset import MediaAsset
 from app.models.feedback_summary import FeedbackSummary
 from app.services.feedback_service import (
     create_or_update_voice_feedback,
     build_voice_payload_from_summary,
 )
-from app.services import vocal_analysis, vocal_feedback  # vocal_analysis.py / vocal_feedback.py
+from app.services import vocal_analysis, vocal_feedback
+from app.services.voice_analysis_service import analyze_voice_from_storage_url
+
 
 router = APIRouter(
     prefix="/api/sessions",
@@ -23,10 +25,10 @@ router = APIRouter(
 
 # --- 공통: 세션/오디오 파일 가져오기 ---
 
-def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> Session:
+def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> InterviewSession:
     session_obj = (
-        db.query(Session)
-        .filter(Session.id == session_id, Session.user_id == user_id)
+        db.query(InterviewSession)
+        .filter(InterviewSession.id == session_id, InterviewSession.user_id == user_id)
         .first()
     )
     if not session_obj:
