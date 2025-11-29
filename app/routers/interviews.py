@@ -12,7 +12,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.deps import get_db
+from app.deps import get_db, get_current_user, CurrentUser
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
 from app.routers import auth as svc_auth
@@ -356,10 +356,10 @@ def delete_interview(
 @router.post("/contents", tags=["interviews"])
 def create_content(
     payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user), 
 ):
-    user_id = _require_user_id(authorization)
+    user_id = current_user.id    
 
     # 필수값 검증
     if (
