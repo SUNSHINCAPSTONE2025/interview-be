@@ -4,6 +4,8 @@ from sqlalchemy import func
 import numpy as np
 import pandas as pd
 
+# (1) 포즈 피드백 관련 함수
+
 def generate_feedback_json(df, problem_sections, fps=30, min_duration=1.0,
                            th_sh=0.04399, th_head=0.01017):
     advice_map = {
@@ -118,3 +120,92 @@ def create_or_update_pose_feedback(db, session_id: int, pose_json: dict):
     db.add(fs)
     db.commit()
     return fs
+
+# (2) 공통 FeedbackSummary 헬퍼
+def get_or_create_feedback_summary(db, session_id: int) -> FeedbackSummary:
+    fs = db.query(FeedbackSummary).filter(
+        FeedbackSummary.session_id == session_id
+    ).first()
+    if fs is None:
+        fs = FeedbackSummary(session_id=session_id)
+        db.add(fs)
+        db.commit()
+        db.refresh(fs)
+    return fs
+
+# (3) 목소리 피드백 관련
+def create_or_update_voice_feedback(db, session_id: int, voice_json: dict) -> FeedbackSummary:
+    """
+    voice_json: vocal_feedback에서 만들어준 payload
+      - total_score
+      - summary
+      - metrics: [
+          {"id": "tremor", "score": ...},
+          {"id": "pause", "score": ...},
+          {"id": "tone", "score": ...},
+          {"id": "speed", "score": ...},
+        ]
+    """
+    fs = get_or_create_feedback_summary(db, session_id)
+
+    fs.overall_voice = voice_json.get("total_score")
+
+    metrics = {m["id"]: m for m in voice_json.get("metrics", [])}
+
+    tremor_m = metrics.get("tremor")
+    if tremor_m:
+        fs.tremor = tremor_m.get("score")
+
+    pause_m = metrics.get("pause")
+    if pause_m:
+        fs.blank = pause_m.get("score")
+
+    tone_m = metrics.get("tone")
+    if tone_m:
+        fs.tone = tone_m.get("score")
+
+    speed_m = metrics.get("speed")
+    if speed_m:
+        fs.speed = speed_m.get("score")
+
+    # 음성 한줄 요약
+    fs.comment = voice_json.get("summary")
+
+    db.add(fs)
+    db.commit()
+    db.refresh(fs)
+    return fs
+
+
+def build_voice_payload_from_summary(fs: FeedbackSummary) -> dict:
+    """
+    GET /api/sessions/{id}/voice-feedback 응답용 간단 payload 생성.
+    """
+    total = fs.overall_voice or fs.overall or 0.0
+
+    return {
+        "total_score": int(round(total)),
+        "summary": fs.comment or "",
+        "metrics": [
+            {
+                "id": "tremor",
+                "label": "떨림",
+                "score": fs.tremor,
+            },
+            {
+                "id": "pause",
+                "label": "공백",
+                "score": fs.blank,
+            },
+            {
+                "id": "tone",
+                "label": "억양",
+                "score": fs.tone,
+            },
+            {
+                "id": "speed",
+                "label": "속도",
+                "score": fs.speed,
+            },
+        ],
+    }
