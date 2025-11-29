@@ -12,7 +12,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.deps import get_db, get_current_user, CurrentUser
+from app.deps import get_db, get_current_user
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
 from app.routers import auth as svc_auth
@@ -357,7 +357,7 @@ def delete_interview(
 def create_content(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
 ):
     user_id = current_user.id    
 
