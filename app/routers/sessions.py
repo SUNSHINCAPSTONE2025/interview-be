@@ -11,6 +11,8 @@ from app.models.sessions import InterviewSession
 from app.models.session_question import SessionQuestion
 from app.models.attempts import Attempt
 from app.models.media_asset import MediaAsset
+from app.models.basic_question import BasicQuestion
+from app.models.generated_question import GeneratedQuestion
 from app.services.storage_service import upload_video
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -173,7 +175,7 @@ def get_session(
         session_id: 세션 ID
 
     Returns:
-        세션 정보 + 질문 목록
+        세션 정보 + 질문 목록 (텍스트 포함)
     """
     # 세션 조회
     session = db.query(InterviewSession).filter(
@@ -188,9 +190,37 @@ def get_session(
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 세션 질문 조회
-    questions = db.query(SessionQuestion).filter(
+    session_questions = db.query(SessionQuestion).filter(
         SessionQuestion.session_id == session_id
     ).order_by(SessionQuestion.order_no).all()
+
+    # 질문 텍스트 포함
+    questions = []
+    for sq in session_questions:
+        text = None
+        question_type_value = None
+
+        # question_type에 따라 적절한 테이블에서 text 가져오기
+        if sq.question_type == "BASIC":
+            bq = db.get(BasicQuestion, sq.question_id)
+            if bq:
+                text = bq.text
+                question_type_value = bq.type
+        elif sq.question_type == "GENERATED":
+            gq = db.get(GeneratedQuestion, sq.question_id)
+            if gq:
+                text = gq.text
+                question_type_value = gq.type
+
+        questions.append({
+            "id": sq.id,
+            "session_id": sq.session_id,
+            "question_type": sq.question_type,
+            "question_id": sq.question_id,
+            "order_no": sq.order_no,
+            "text": text,
+            "type": question_type_value
+        })
 
     return {
         "id": session.id,
@@ -201,16 +231,9 @@ def get_session(
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "question_count": len(questions),
         "session_max": session.session_max,
-        "questions": [
-            {
-                "id": q.id,
-                "question_type": q.question_type,
-                "question_id": q.question_id,
-                "order_no": q.order_no,
-            }
-            for q in questions
-        ],
+        "questions": questions,
     }
 
 

@@ -16,6 +16,8 @@ from app.deps import get_db
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
 from app.models.generated_question import GeneratedQuestion
+from app.models.basic_question import BasicQuestion
+from app.models.session_question import SessionQuestion
 from app.routers import auth as svc_auth
 from app.services import generation as svc_gen
 from app.services import create_question as svc_question
@@ -193,7 +195,31 @@ def get_interview(id: int, db: Session = Depends(get_db)):
 
 # 4) 메인: 연습 시작
 @router.post("/{id}/sessions/start")
-def start_session(id: int, db: Session = Depends(get_db)):
+def start_session(
+    id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db)
+):
+    """
+    세션 시작 및 질문 선택
+
+    - practice_type에 따라 해당 타입의 질문만 선택
+    - BasicQuestion에서 3개 랜덤 선택 (해당 type)
+    - GeneratedQuestion에서 2개 랜덤 선택 (is_used=False, 해당 type)
+    - 총 5개 질문을 SessionQuestion에 저장
+    - 질문 텍스트와 함께 반환
+    """
+    # practice_type 검증
+    practice_type = payload.get("practice_type")
+    if practice_type not in ["job", "soft"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "practice_type must be one of ['job', 'soft']"
+            }
+        )
+
     # i: Optional[Interview] = db.query(Interview).get(id)
     i = db.get(Interview, id)
     if not i:
@@ -205,8 +231,96 @@ def start_session(id: int, db: Session = Depends(get_db)):
             },
         )
 
+    # 세션 생성
     s = InterviewSession(content_id=i.id, status="draft")
     db.add(s)
+    db.flush()  # s.id 생성
+
+    # 1. BasicQuestion 3개 랜덤 선택 (practice_type 필터링)
+    basic_questions = (
+        db.query(BasicQuestion)
+        .filter(BasicQuestion.type == practice_type)
+        .order_by(func.random())
+        .limit(3)
+        .all()
+    )
+
+    if len(basic_questions) < 3:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "insufficient_basic_questions",
+                "detail": f"Need at least 3 basic questions of type '{practice_type}', found {len(basic_questions)}"
+            }
+        )
+
+    # 2. GeneratedQuestion 2개 랜덤 선택 (is_used=False, practice_type 필터링)
+    generated_questions = (
+        db.query(GeneratedQuestion)
+        .filter(
+            GeneratedQuestion.content_id == i.id,
+            GeneratedQuestion.is_used == False,
+            GeneratedQuestion.type == practice_type
+        )
+        .order_by(func.random())
+        .limit(2)
+        .all()
+    )
+
+    if len(generated_questions) < 2:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "insufficient_generated_questions",
+                "detail": f"Need at least 2 unused generated questions of type '{practice_type}' for content_id={i.id}, found {len(generated_questions)}"
+            }
+        )
+
+    # 3. GeneratedQuestion의 is_used를 True로 업데이트
+    for gq in generated_questions:
+        gq.is_used = True
+
+    # 4. SessionQuestion에 저장
+    all_questions = []
+
+    # BasicQuestion 추가
+    for idx, bq in enumerate(basic_questions):
+        sq = SessionQuestion(
+            session_id=s.id,
+            question_type="BASIC",
+            question_id=bq.id,
+            order_no=idx + 1
+        )
+        db.add(sq)
+        all_questions.append({
+            "id": sq.id if sq.id else None,
+            "question_type": "BASIC",
+            "question_id": bq.id,
+            "order_no": idx + 1,
+            "text": bq.text,
+            "type": bq.type
+        })
+
+    # GeneratedQuestion 추가
+    for idx, gq in enumerate(generated_questions):
+        sq = SessionQuestion(
+            session_id=s.id,
+            question_type="GENERATED",
+            question_id=gq.id,
+            order_no=len(basic_questions) + idx + 1
+        )
+        db.add(sq)
+        all_questions.append({
+            "id": sq.id if sq.id else None,
+            "question_type": "GENERATED",
+            "question_id": gq.id,
+            "order_no": len(basic_questions) + idx + 1,
+            "text": gq.text,
+            "type": gq.type
+        })
+
     db.commit()
     db.refresh(s)
 
@@ -215,6 +329,7 @@ def start_session(id: int, db: Session = Depends(get_db)):
         "session_id": s.id,
         "content_id": i.id,
         "status": s.status,
+        "questions": all_questions
     }
 
 
@@ -562,7 +677,7 @@ def create_question_plan(
     mode = payload.get("mode")
     count = payload.get("count", 5)
 
-    if mode not in ["tech", "soft", "both"]:
+    if mode not in ["tech", "soft"]:
         raise HTTPException(
             status_code=400,
             detail={
