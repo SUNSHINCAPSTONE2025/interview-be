@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Query
 router = APIRouter()
 
-@router.get("/{interview_id}/question-plan/preview")
-def question_plan_preview(interview_id: int,
+@router.get("/{content_id}/question-plan/preview")
+def question_plan_preview(content_id: int,
                         mode: str = Query(..., pattern="^(tech|soft|both)$"),  # ✅ regex → pattern
                         count: int = 5,
                         language: str = "ko",

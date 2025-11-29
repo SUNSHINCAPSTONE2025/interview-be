@@ -31,14 +31,14 @@ class StartIn(BaseModel):
     temperature: Optional[float] = 0.7
     seed: Optional[int] = None
 
-@router.post("/{interview_id}/sessions/start", include_in_schema=False)
+@router.post("/{content_id}/sessions/start", include_in_schema=False)
 def deprecated_route():
     # 설명용: 실제 경로는 /api/interviews/{id}/sessions/start 이지만
     # main에서 prefix를 /api/sessions 로 잡았으면 아래 엔드포인트를 사용
-    return {"message":"use /api/sessions/{interview_id}/start"}
+    return {"message":"use /api/sessions/{content_id}/start"}
 
-@router.post("/{interview_id}/start")
-def session_start(interview_id: int, payload: StartIn):
+@router.post("/{content_id}/start")
+def session_start(content_id: int, payload: StartIn):
     if not payload.use_saved_context and not (payload.override_context and payload.override_context.questions):
         raise HTTPException(status_code=400, detail="Provide override_context.questions or enable use_saved_context")
     # TODO: 생성 작업 큐잉

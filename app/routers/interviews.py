@@ -34,19 +34,19 @@ def _calc_d_day(interview_date: Optional[date]) -> Optional[int]:
     return (interview_date - date.today()).days
 
 # 특정 면접의 세션 통계 조회
-def _get_session_stats(db: Session, interview_id: int) -> Tuple[int, int]:
+def _get_session_stats(db: Session, content_id: int) -> Tuple[int, int]:
 
     total = (
         db.query(InterviewSession)
-        .filter(InterviewSession.interview_id == interview_id)
+        .filter(InterviewSession.content_id == content_id)
         .count()
     )
 
     completed = (
         db.query(InterviewSession)
         .filter(
-            InterviewSession.interview_id == interview_id,
-            InterviewSession.status == "completed",
+            InterviewSession.content_id == content_id,
+            InterviewSession.status == "done",
         )
         .count()
     )
@@ -203,7 +203,7 @@ def start_session(id: int, db: Session = Depends(get_db)):
             },
         )
 
-    s = InterviewSession(interview_id=i.id, status="ongoing")
+    s = InterviewSession(content_id=i.id, status="draft")
     db.add(s)
     db.commit()
     db.refresh(s)
@@ -211,7 +211,7 @@ def start_session(id: int, db: Session = Depends(get_db)):
     return {
         "message": "session_started",
         "session_id": s.id,
-        "interview_id": i.id,
+        "content_id": i.id,
         "status": s.status,
     }
 
@@ -537,15 +537,15 @@ def create_resume(
 
 
 # 면접 질문 유형 선택
-@router.post("/{interview_id}/question-plan")
+@router.post("/{content_id}/question-plan")
 def create_question_plan(
-    interview_id: int,
+    content_id: int,
     payload: dict = Body(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
     user_id = _require_user_id(authorization)
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -595,9 +595,9 @@ def create_question_plan(
 
 
 # 오늘의 목표 & 연습 전 팁
-@router.get("/{interview_id}/question-plan/preview?mode=tech")
+@router.get("/{content_id}/question-plan/preview?mode=tech")
 def preview_question_plan(
-    interview_id: int,
+    content_id: int,
     mode: str,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
@@ -613,7 +613,7 @@ def preview_question_plan(
             detail={"message": "rate_limited", "detail": "Too many previews."},
         )
 
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -640,9 +640,9 @@ def preview_question_plan(
 
 
 # 면접 질문 생성 + 세션 시작
-@router.post("/{interview_id}/sessions/start", status_code=202)
+@router.post("/{content_id}/sessions/start", status_code=202)
 def start_generation_session(
-    interview_id: int,
+    content_id: int,
     payload: dict = Body(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
@@ -658,7 +658,7 @@ def start_generation_session(
             detail={"message": "rate_limited", "detail": "Too many generations."},
         )
 
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -668,7 +668,7 @@ def start_generation_session(
         )
 
     # 중복 실행 방지 (409)
-    if svc_gen.is_running(interview_id):
+    if svc_gen.is_running(content_id):
         raise HTTPException(
             status_code=409, detail={"message": "session_already_running"}
         )
@@ -732,13 +732,13 @@ def start_generation_session(
                 )
 
     # 세션 생성(DB) + 실행 마킹
-    sess = InterviewSession(interview_id=i.id, status="ongoing")
+    sess = InterviewSession(content_id=i.id, status="running")
     db.add(sess)
     db.commit()
     db.refresh(sess)
 
     # 동시실행 방지 락 세팅
-    svc_gen.mark_running(interview_id)
+    svc_gen.mark_running(content_id)
 
     # 생성 작업 ID들
     session_id, generation_id = svc_gen.new_ids()

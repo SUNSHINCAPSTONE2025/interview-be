@@ -9,8 +9,8 @@ class InterviewSession(Base):
     id = Column(BigInteger, primary_key=True, index=True)
 
     # dev 필드
-    interview_id = Column(BigInteger, ForeignKey("content.id", ondelete="CASCADE"), nullable=False)
-    status = Column(String(20), default="ongoing")  # ongoing|completed|draft|running|done|canceled
+    content_id = Column(BigInteger, ForeignKey("content.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), default="draft")  # draft|running|done|canceled
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     ended_at = Column(DateTime(timezone=True), nullable=True)
 
