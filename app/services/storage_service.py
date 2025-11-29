@@ -4,9 +4,11 @@ import os
 from app.config import settings
 
 SUPABASE_URL = settings.supabase_url
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET")
-AUDIO_BUCKET = os.getenv("SUPABASE_AUDIO_BUCKET")
+# service_role 키 또는 anon 키 사용
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+# 기본값: interview_media_asset (face_analysis.py와 동일)
+VIDEO_BUCKET = os.getenv("SUPABASE_VIDEO_BUCKET", "interview_media_asset")
+AUDIO_BUCKET = os.getenv("SUPABASE_AUDIO_BUCKET", "interview_media_asset")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
