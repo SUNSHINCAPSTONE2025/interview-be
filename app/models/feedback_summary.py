@@ -1,32 +1,28 @@
-from sqlalchemy import Column, BigInteger, Float, Text, DateTime, func
-from sqlalchemy.types import JSON
+from sqlalchemy import Column, BigInteger, Numeric, Text, ForeignKey
 from app.db.base import Base
 
 class FeedbackSummary(Base):
     __tablename__ = "feedback_summary"
-    session_id = Column(BigInteger, primary_key=True, index=True)  # 1:1 with sessions.id
-    overall = Column(Float, nullable=True)
-    overall_face = Column(Float, nullable=True)
-    overall_voice = Column(Float, nullable=True)
-    overall_pose = Column(Float, nullable=True)
 
-    gaze = Column(Float, nullable=True)
-    eye_blink = Column(Float, nullable=True)
-    mouth = Column(Float, nullable=True)
+    session_id = Column(BigInteger, ForeignKey("sessions.id"), primary_key=True, index=True)  # 1:1 with sessions.id
 
-    tremor = Column(Float, nullable=True)
-    blank = Column(Float, nullable=True)
-    tone = Column(Float, nullable=True)
-    speed = Column(Float, nullable=True)
+    overall = Column(Numeric(5, 2), nullable=True)
+    overall_face = Column(Numeric(5, 2), nullable=True)
+    overall_voice = Column(Numeric(5, 2), nullable=True)
+    overall_pose = Column(Numeric(5, 2), nullable=True)
 
-    shoulder = Column(Float, nullable=True)
-    head = Column(Float, nullable=True)
-    hand = Column(Float, nullable=True)
+    gaze = Column(Numeric(5, 2), nullable=True)
+    eye_blink = Column(Numeric(5, 2), nullable=True)
+    mouth = Column(Numeric(5, 2), nullable=True)
+
+    tremor = Column(Numeric(5, 2), nullable=True)
+    blank = Column(Numeric(5, 2), nullable=True)
+    tone = Column(Numeric(5, 2), nullable=True)
+    speed = Column(Numeric(5, 2), nullable=True)
+
+    shoulder = Column(Numeric(5, 2), nullable=True)
+    head = Column(Numeric(5, 2), nullable=True)
+    hand = Column(Numeric(5, 2), nullable=True)
 
     speech = Column(Text, nullable=True)
     comment = Column(Text, nullable=True)
-
-    # 추가: 자세 문제 구간을 JSON으로 저장
-    problem_sections = Column(JSON, nullable=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

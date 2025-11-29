@@ -10,8 +10,9 @@ from sqlalchemy import (
     ForeignKey,
     func,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from app.models.user_profile import Base
+from app.db.base import Base
 
 
 class Interview(Base):
@@ -19,20 +20,18 @@ class Interview(Base):
     __tablename__ = "content"
 
     id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(String(64), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False, index=True)
 
-    company = Column(String, nullable=False)
-    role = Column(String, nullable=False)
+    company = Column(String(20), nullable=False)
+    role = Column(String(20), nullable=False)
 
-    role_category = Column(Integer, nullable=False, default=0)
+    role_category = Column(Integer, nullable=True)
 
-    interview_date = Column(Date, nullable=True)
+    interview_date = Column(Date, nullable=False)
     jd_text = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
 
     # 관계
     sessions = relationship(
@@ -56,19 +55,15 @@ class Resume(Base):
 
     id = Column(BigInteger, primary_key=True, index=True)
 
-    user_id = Column(String(64), nullable=False)
-    content_id = Column(
-        BigInteger, ForeignKey("content.id"), nullable=False
-    )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False)
+    content_id = Column(BigInteger, ForeignKey("content.id"), nullable=False)
 
-    version = Column(Integer, nullable=False, default=1)
+    version = Column(Integer, nullable=False)
 
-    question = Column(String, nullable=False)
-    answer = Column(Text, nullable=True)
+    question = Column(String(50), nullable=False)
+    answer = Column(Text, nullable=False)
 
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
 
     interview = relationship("Interview", back_populates="resumes")
