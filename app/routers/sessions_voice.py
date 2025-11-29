@@ -1,4 +1,4 @@
-# app/routers/sessions_voice_feedback.py
+# app/routers/sessions_voice.py
 
 from typing import Any, Dict
 
@@ -13,7 +13,9 @@ from app.services.feedback_service import (
     create_or_update_voice_feedback,
     build_voice_payload_from_summary,
 )
-from app.services import vocal_analysis, vocal_feedback  # vocal_analysis.py / vocal_feedback.py
+from app.services import vocal_analysis, vocal_feedback
+from app.services.voice_analysis_service import analyze_voice_from_storage_url
+
 
 router = APIRouter(
     prefix="/api/sessions",
@@ -105,7 +107,7 @@ def create_or_update_voice_feedback_endpoint(
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    _get_session_or_404(db, session_id, current_user.id)
+    _get_session_or_404(db, session_id, current_user["id"])
 
     storage_url = _get_audio_storage_url(db, session_id)
 
@@ -133,7 +135,7 @@ def get_voice_feedback_endpoint(
     - summary
     만 간단히 조회
     """
-    _get_session_or_404(db, session_id, current_user.id)
+    _get_session_or_404(db, session_id, current_user["id"])
 
     fs = (
         db.query(FeedbackSummary)
