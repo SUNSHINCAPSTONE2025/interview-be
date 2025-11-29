@@ -22,10 +22,7 @@ from app.routers import records as records_router
 from app.routers import answers as answers_router
 from app.routers import plans as plans_router
 from app.routers import user_profile as user_profile_router
-
-# ------------------------
-# feat#6 라우터 import
-# ------------------------
+from app.routers import sessions_voice
 from app.routers import pose_analysis
 
 # ------------------------
@@ -58,7 +55,8 @@ app.include_router(records_router.router)
 app.include_router(answers_router.router)
 app.include_router(plans_router.router)
 app.include_router(user_profile_router.router)
-app.include_router(pose_analysis.router)  # feat#6 추가
+app.include_router(pose_analysis.router)
+app.include_router(sessions_voice.router)
 
 # ------------------------
 # 4) Root 엔드포인트
