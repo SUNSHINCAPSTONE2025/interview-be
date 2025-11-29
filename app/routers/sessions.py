@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query, Body
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -8,6 +8,7 @@ import os
 
 from app.deps import get_db, get_current_user
 from app.models.sessions import InterviewSession
+from app.models.session_question import SessionQuestion
 from app.models.attempts import Attempt
 from app.models.media_asset import MediaAsset
 from app.services.storage_service import upload_video
@@ -30,6 +31,11 @@ class StartIn(BaseModel):
     override_context: Optional[OverrideContext] = None
     temperature: Optional[float] = 0.7
     seed: Optional[int] = None
+
+class UpdateSessionStatusRequest(BaseModel):
+    status: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
 
 @router.post("/{content_id}/sessions/start", include_in_schema=False)
 def deprecated_route():
@@ -148,3 +154,156 @@ async def upload_recording(
         # 임시 파일 삭제
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+# ========================================
+# 새로운 API 엔드포인트
+# ========================================
+
+@router.get("/{session_id}")
+def get_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_user)
+):
+    """
+    세션 상세 조회 (질문 목록 포함)
+
+    Args:
+        session_id: 세션 ID
+
+    Returns:
+        세션 정보 + 질문 목록
+    """
+    # 세션 조회
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == session_id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="session_not_found")
+
+    # 권한 확인
+    if session.user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    # 세션 질문 조회
+    questions = db.query(SessionQuestion).filter(
+        SessionQuestion.session_id == session_id
+    ).order_by(SessionQuestion.order_no).all()
+
+    return {
+        "id": session.id,
+        "user_id": str(session.user_id),
+        "content_id": session.content_id,
+        "status": session.status,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "created_at": session.created_at.isoformat() if session.created_at else None,
+        "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+        "session_max": session.session_max,
+        "questions": [
+            {
+                "id": q.id,
+                "question_type": q.question_type,
+                "question_id": q.question_id,
+                "order_no": q.order_no,
+            }
+            for q in questions
+        ],
+    }
+
+
+@router.get("")
+def list_sessions(
+    content_id: int = Query(..., description="컨텐츠 ID"),
+    db: Session = Depends(get_db),
+    user = Depends(get_current_user)
+):
+    """
+    컨텐츠별 세션 목록 조회
+
+    Args:
+        content_id: 컨텐츠(면접) ID
+
+    Returns:
+        세션 목록 (최신순)
+    """
+    # 세션 목록 조회 (최신순)
+    sessions = db.query(InterviewSession).filter(
+        InterviewSession.content_id == content_id,
+        InterviewSession.user_id == user["id"]  # 권한 확인
+    ).order_by(InterviewSession.created_at.desc()).all()
+
+    return [
+        {
+            "id": s.id,
+            "user_id": str(s.user_id),
+            "content_id": s.content_id,
+            "status": s.status,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            "session_max": s.session_max,
+        }
+        for s in sessions
+    ]
+
+
+@router.patch("/{session_id}/status")
+def update_session_status(
+    session_id: int,
+    payload: UpdateSessionStatusRequest,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_user)
+):
+    """
+    세션 상태 업데이트
+
+    Args:
+        session_id: 세션 ID
+        payload: 업데이트할 필드 (status, started_at, ended_at)
+
+    Returns:
+        업데이트된 세션 정보
+    """
+    # 세션 조회
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == session_id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="session_not_found")
+
+    # 권한 확인
+    if session.user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    # 상태 업데이트
+    if payload.status is not None:
+        # 유효한 status 값 검증
+        valid_statuses = ["draft", "running", "done", "canceled"]
+        if payload.status not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+            )
+        session.status = payload.status
+
+    if payload.started_at is not None:
+        session.started_at = datetime.fromisoformat(payload.started_at.replace('Z', '+00:00'))
+
+    if payload.ended_at is not None:
+        session.ended_at = datetime.fromisoformat(payload.ended_at.replace('Z', '+00:00'))
+
+    db.commit()
+    db.refresh(session)
+
+    return {
+        "success": True,
+        "session_id": session.id,
+        "status": session.status,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+    }
