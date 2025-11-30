@@ -336,13 +336,13 @@ def start_session(
 # 마이페이지
 # A) 마이페이지: 특정 사용자 인터뷰 목록
 @router.get("/users/{user_id}/interviews", tags=["mypage"])
-def list_user_interviews(
+async def list_user_interviews(
     user_id: str,
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),   # ← authorization은 여기서 처리
     db: Session = Depends(get_db),
 ):
-    token_uid = _require_user_id(authorization)
-    if token_uid != user_id:
+    # 1) 토큰의 user_id 와 path 의 user_id가 같은지 체크
+    if current["id"] != user_id:
         raise HTTPException(
             status_code=403,
             detail={
@@ -351,16 +351,20 @@ def list_user_interviews(
             },
         )
 
+    # 2) 이 user_id의 인터뷰 조회
     items = (
         db.query(Interview)
         .filter(Interview.user_id == user_id)
         .order_by(Interview.id.desc())
         .all()
     )
+
     if not items:
         raise HTTPException(
-            status_code=404, detail={"message": "interviews_not_found"}
+            status_code=404,
+            detail={"message": "interviews_not_found"},
         )
+
     return [_serialize_interview(i, db) for i in items]
 
 
