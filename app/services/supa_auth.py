@@ -9,6 +9,15 @@ SUPABASE_JWT_SECRET = settings.supabase_jwt_secret
 if not SUPABASE_JWT_SECRET:
     raise RuntimeError("SUPABASE_JWT_SECRET 환경변수가 설정되어 있지 않습니다.")
 
+# 🔍 디버그용: 시크릿 해시 일부를 로그로 남기기
+def _debug_log_secret_hash():
+    import hashlib, logging
+
+    h = hashlib.sha256(SUPABASE_JWT_SECRET.encode()).hexdigest()
+    logging.warning("JWT secret sha256 (first 12) = %s", h[:12])
+
+_debug_log_secret_hash()
+
 
 async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
     if not authorization:
@@ -23,7 +32,6 @@ async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
         raise ValueError("invalid Authorization header")
 
     try:
-        # 🔍 우선은 *서명만* 검증 (aud/iss는 끔)
         claims = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
@@ -33,9 +41,7 @@ async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
                 "verify_iss": False,
             },
         )
-
     except JWTError as e:
-        # 여기서 어떤 에러인지 로그에 남기기
         import logging
 
         logging.exception("JWT decode failed")
@@ -45,7 +51,6 @@ async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
     email = claims.get("email")
 
     if not user_id:
-        # sub가 없다 = 우리가 기대하는 Supabase access token 이 아님
         raise ValueError("invalid token: missing sub")
 
     return {
