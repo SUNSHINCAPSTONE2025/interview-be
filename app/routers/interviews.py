@@ -338,7 +338,7 @@ def start_session(
 @router.get("/users/{user_id}/interviews", tags=["mypage"])
 async def list_user_interviews(
     user_id: str,
-    current = Depends(get_current_user),   # ← authorization은 여기서 처리
+    current = Depends(get_current_user),   
     db: Session = Depends(get_db),
 ):
     # 1) 토큰의 user_id 와 path 의 user_id가 같은지 체크
@@ -446,16 +446,16 @@ def update_interview(
 @router.delete("/{id}", tags=["mypage"])
 def delete_interview(
     id: int,
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    token_uid = _require_user_id(authorization)
+    token_uid = current["id"]
 
     # i: Optional[Interview] = db.query(Interview).get(id)
     i = db.get(Interview, id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if i.user_id != token_uid:
+    if str(i.user_id) != token_uid:
         raise HTTPException(
             status_code=403,
             detail={
@@ -467,7 +467,6 @@ def delete_interview(
     db.delete(i)
     db.commit()
     return {"message": "interview_deleted_successfully"}
-
 
 # 면접 등록 페이지
 # 면접 정보 등록: POST /api/interviews/contents
@@ -558,10 +557,10 @@ def create_content(
 @router.post("/resume", tags=["interviews"])
 def create_resume(
     payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(authorization)
+    user_id = current["id"]
 
     # 필드 검증
     content_id = payload.get("content_id")
@@ -577,7 +576,7 @@ def create_resume(
         raise HTTPException(
             status_code=404, detail={"message": "content_not_found"}
         )
-    if content.user_id != user_id:
+    if str(content.user_id) != user_id:
         raise HTTPException(
             status_code=403,
             detail={
@@ -659,14 +658,15 @@ def create_resume(
 def create_question_plan(
     content_id: int,
     payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(authorization)
+    user_id = current["id"]
+
     i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if i.user_id != user_id:
+    if str(i.user_id) != user_id:
         raise HTTPException(
             status_code=403,
             detail={
@@ -717,10 +717,10 @@ def create_question_plan(
 def preview_question_plan(
     content_id: int,
     mode: str,
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(authorization)
+    user_id = current["id"]
 
     # 레이트리밋
     try:
@@ -734,7 +734,7 @@ def preview_question_plan(
     i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if i.user_id != user_id:
+    if str(i.user_id) != user_id:
         raise HTTPException(
             status_code=403,
             detail={"message": "forbidden", "detail": "User not authorized"},
@@ -758,27 +758,15 @@ def preview_question_plan(
 
 
 # 자소서 기반 면접 질문 생성
-@router.post("/question", tags=["interviews"])
 def create_interview_questions(
     payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     자소서 기반 면접 질문 생성
-
-    Args:
-        payload: 요청 본문
-            - qas: 자소서 Q&A 리스트 (필수)
-            - content_id: 면접 컨텐츠 ID (필수)
-            - emit_confidence: 신뢰도 반환 여부 (사용 미정)
-            - use_seed: seed 사용 여부 (사용 미정)
-            - top_k_seed: top-k seed 값 (사용 미정)
-
-    Returns:
-        생성된 질문 개수와 성공 메시지
     """
-    user_id = _require_user_id(authorization)
+    user_id = current["id"]
 
     # 필수 파라미터 검증
     if "qas" not in payload or not isinstance(payload["qas"], list):
@@ -786,8 +774,8 @@ def create_interview_questions(
             status_code=400,
             detail={
                 "message": "invalid_request_body",
-                "detail": "qas is required and must be a list"
-            }
+                "detail": "qas is required and must be a list",
+            },
         )
 
     if "content_id" not in payload or not isinstance(payload["content_id"], int):
@@ -795,8 +783,8 @@ def create_interview_questions(
             status_code=400,
             detail={
                 "message": "invalid_request_body",
-                "detail": "content_id is required and must be an integer"
-            }
+                "detail": "content_id is required and must be an integer",
+            },
         )
 
     qas = payload["qas"]
@@ -807,15 +795,15 @@ def create_interview_questions(
     if not content:
         raise HTTPException(
             status_code=404,
-            detail={"message": "content_not_found"}
+            detail={"message": "content_not_found"},
         )
-    if content.user_id != user_id:
+    if str(content.user_id) != user_id:
         raise HTTPException(
             status_code=403,
             detail={
                 "message": "forbidden",
-                "detail": "User not authorized for this content"
-            }
+                "detail": "User not authorized for this content",
+            },
         )
 
     # QA 검증
@@ -824,23 +812,23 @@ def create_interview_questions(
             status_code=400,
             detail={
                 "message": "invalid_request_body",
-                "detail": "qas must contain at least one item"
-            }
+                "detail": "qas must contain at least one item",
+            },
         )
 
     for qa in qas:
         if not isinstance(qa, dict):
             raise HTTPException(
                 status_code=400,
-                detail={"message": "invalid_qa_format"}
+                detail={"message": "invalid_qa_format"},
             )
         if "q" not in qa or "a" not in qa:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "message": "invalid_qa_format",
-                    "detail": "Each QA must have 'q' and 'a' fields"
-                }
+                    "detail": "Each QA must have 'q' and 'a' fields",
+                },
             )
 
     # 질문 생성
@@ -852,8 +840,8 @@ def create_interview_questions(
             status_code=500,
             detail={
                 "message": "question_generation_failed",
-                "detail": str(e)
-            }
+                "detail": str(e),
+            },
         )
 
     # DB에 저장
@@ -863,7 +851,7 @@ def create_interview_questions(
             content_id=content_id,
             type=q.get("type", "job"),
             text=q.get("text", ""),
-            is_used=False
+            is_used=False,
         )
         db.add(question_record)
         saved_count += 1
@@ -882,10 +870,10 @@ def create_interview_questions(
 def start_generation_session(
     content_id: int,
     payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(authorization)
+    user_id = current["id"]
 
     # 레이트리밋
     try:
@@ -899,7 +887,7 @@ def start_generation_session(
     i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if i.user_id != user_id:
+    if str(i.user_id) != user_id:
         raise HTTPException(
             status_code=403,
             detail={"message": "forbidden", "detail": "User not authorized"},
