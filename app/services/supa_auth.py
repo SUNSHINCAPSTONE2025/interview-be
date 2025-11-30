@@ -13,11 +13,6 @@ if not SUPABASE_JWT_SECRET:
 
 
 async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
-    """
-    - Authorization: Bearer <access_token> 헤더에서 토큰을 꺼내서
-    - Supabase JWT secret(HS256)으로 검증하고
-    - 기본적인 클레임(sub, email)을 반환한다.
-    """
     if not authorization:
         raise ValueError("missing Authorization header")
 
@@ -30,23 +25,30 @@ async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
         raise ValueError("invalid Authorization header")
 
     try:
-        # issuer 는 None일 수도 있어서 옵션으로만 넣어줌
-        decode_kwargs = {
-            "key": SUPABASE_JWT_SECRET,
-            "algorithms": ["HS256"],  # Supabase access token 의 alg
-        }
-        if SUPABASE_JWT_AUDIENCE:
-            decode_kwargs["audience"] = SUPABASE_JWT_AUDIENCE  # "authenticated"
-        if SUPABASE_ISSUER:
-            decode_kwargs["issuer"] = SUPABASE_ISSUER          # "https://.../auth/v1"
-
-        claims = jwt.decode(token, **decode_kwargs)
+        # 👉 우선은 최소 설정만: secret + algorithm
+        claims = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            options={
+                "verify_aud": False,   # aud 검증 끔
+                "verify_iss": False,   # iss 검증 끔
+            },
+        )
 
     except JWTError as e:
-        # get_current_user 쪽에서 401로 바꿔서 응답
+        # 디버깅용으로 로그 남겨보는 것도 좋음
+        print("JWT decode error:", repr(e))
         raise ValueError("invalid token") from e
 
+    # sub / email 없는 토큰(anon key 등)을 잘못 넣었을 때 대비
+    user_id = claims.get("sub")
+    email = claims.get("email")
+
+    if not user_id:
+        raise ValueError("invalid token: missing sub")
+
     return {
-        "user_id": claims["sub"],
-        "email": claims.get("email"),
+        "user_id": user_id,
+        "email": email,
     }
