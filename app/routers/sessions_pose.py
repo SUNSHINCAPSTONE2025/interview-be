@@ -21,9 +21,9 @@ APP_DIR = BASE_DIR / "app"
 RECORDINGS_PATH = APP_DIR / "recordings"
 os.makedirs(RECORDINGS_PATH, exist_ok=True)  # 서버 실행 시 자동 생성
 
-@router.post("/api/interviews/{interview_id}/sessions/start")
+@router.post("/api/interviews/{content_id}/sessions/start")
 def start_session(
-    interview_id: int,
+    content_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user=Depends(get_current_user)
@@ -31,7 +31,7 @@ def start_session(
     # 1) 세션 생성
     session = InterviewSession(
         user_id=user["id"],
-        content_id=interview_id,
+        content_id=content_id,
         status="running",
         started_at=datetime.now(timezone.utc)
     )

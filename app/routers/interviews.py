@@ -15,8 +15,12 @@ from sqlalchemy import func
 from app.deps import get_db, get_current_user
 from app.models.interviews import Interview, Resume
 from app.models.sessions import InterviewSession
+from app.models.generated_question import GeneratedQuestion
+from app.models.basic_question import BasicQuestion
+from app.models.session_question import SessionQuestion
 from app.routers import auth as svc_auth
 from app.services import generation as svc_gen
+from app.services import create_question as svc_question
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
 
@@ -34,19 +38,19 @@ def _calc_d_day(interview_date: Optional[date]) -> Optional[int]:
     return (interview_date - date.today()).days
 
 # 특정 면접의 세션 통계 조회
-def _get_session_stats(db: Session, interview_id: int) -> Tuple[int, int]:
+def _get_session_stats(db: Session, content_id: int) -> Tuple[int, int]:
 
     total = (
         db.query(InterviewSession)
-        .filter(InterviewSession.interview_id == interview_id)
+        .filter(InterviewSession.content_id == content_id)
         .count()
     )
 
     completed = (
         db.query(InterviewSession)
         .filter(
-            InterviewSession.interview_id == interview_id,
-            InterviewSession.status == "completed",
+            InterviewSession.content_id == content_id,
+            InterviewSession.status == "done",
         )
         .count()
     )
@@ -191,7 +195,31 @@ def get_interview(id: int, db: Session = Depends(get_db)):
 
 # 4) 메인: 연습 시작
 @router.post("/{id}/sessions/start")
-def start_session(id: int, db: Session = Depends(get_db)):
+def start_session(
+    id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db)
+):
+    """
+    세션 시작 및 질문 선택
+
+    - practice_type에 따라 해당 타입의 질문만 선택
+    - BasicQuestion에서 3개 랜덤 선택 (해당 type)
+    - GeneratedQuestion에서 2개 랜덤 선택 (is_used=False, 해당 type)
+    - 총 5개 질문을 SessionQuestion에 저장
+    - 질문 텍스트와 함께 반환
+    """
+    # practice_type 검증
+    practice_type = payload.get("practice_type")
+    if practice_type not in ["job", "soft"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "practice_type must be one of ['job', 'soft']"
+            }
+        )
+
     # i: Optional[Interview] = db.query(Interview).get(id)
     i = db.get(Interview, id)
     if not i:
@@ -203,16 +231,105 @@ def start_session(id: int, db: Session = Depends(get_db)):
             },
         )
 
-    s = InterviewSession(interview_id=i.id, status="ongoing")
+    # 세션 생성
+    s = InterviewSession(content_id=i.id, status="draft")
     db.add(s)
+    db.flush()  # s.id 생성
+
+    # 1. BasicQuestion 3개 랜덤 선택 (practice_type 필터링)
+    basic_questions = (
+        db.query(BasicQuestion)
+        .filter(BasicQuestion.type == practice_type)
+        .order_by(func.random())
+        .limit(3)
+        .all()
+    )
+
+    if len(basic_questions) < 3:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "insufficient_basic_questions",
+                "detail": f"Need at least 3 basic questions of type '{practice_type}', found {len(basic_questions)}"
+            }
+        )
+
+    # 2. GeneratedQuestion 2개 랜덤 선택 (is_used=False, practice_type 필터링)
+    generated_questions = (
+        db.query(GeneratedQuestion)
+        .filter(
+            GeneratedQuestion.content_id == i.id,
+            GeneratedQuestion.is_used == False,
+            GeneratedQuestion.type == practice_type
+        )
+        .order_by(func.random())
+        .limit(2)
+        .all()
+    )
+
+    if len(generated_questions) < 2:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "insufficient_generated_questions",
+                "detail": f"Need at least 2 unused generated questions of type '{practice_type}' for content_id={i.id}, found {len(generated_questions)}"
+            }
+        )
+
+    # 3. GeneratedQuestion의 is_used를 True로 업데이트
+    for gq in generated_questions:
+        gq.is_used = True
+
+    # 4. SessionQuestion에 저장
+    all_questions = []
+
+    # BasicQuestion 추가
+    for idx, bq in enumerate(basic_questions):
+        sq = SessionQuestion(
+            session_id=s.id,
+            question_type="BASIC",
+            question_id=bq.id,
+            order_no=idx + 1
+        )
+        db.add(sq)
+        all_questions.append({
+            "id": sq.id if sq.id else None,
+            "question_type": "BASIC",
+            "question_id": bq.id,
+            "order_no": idx + 1,
+            "text": bq.text,
+            "type": bq.type
+        })
+
+    # GeneratedQuestion 추가
+    for idx, gq in enumerate(generated_questions):
+        sq = SessionQuestion(
+            session_id=s.id,
+            question_type="GENERATED",
+            question_id=gq.id,
+            order_no=len(basic_questions) + idx + 1
+        )
+        db.add(sq)
+        all_questions.append({
+            "id": sq.id if sq.id else None,
+            "question_type": "GENERATED",
+            "question_id": gq.id,
+            "order_no": len(basic_questions) + idx + 1,
+            "text": gq.text,
+            "type": gq.type
+        })
+
     db.commit()
     db.refresh(s)
 
     return {
         "message": "session_started",
         "session_id": s.id,
-        "interview_id": i.id,
+        "content_id": i.id,
         "status": s.status,
+        "questions": all_questions
     }
 
 
@@ -537,15 +654,15 @@ def create_resume(
 
 
 # 면접 질문 유형 선택
-@router.post("/{interview_id}/question-plan")
+@router.post("/{content_id}/question-plan")
 def create_question_plan(
-    interview_id: int,
+    content_id: int,
     payload: dict = Body(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
     user_id = _require_user_id(authorization)
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -560,7 +677,7 @@ def create_question_plan(
     mode = payload.get("mode")
     count = payload.get("count", 5)
 
-    if mode not in ["tech", "soft", "both"]:
+    if mode not in ["tech", "soft"]:
         raise HTTPException(
             status_code=400,
             detail={
@@ -595,9 +712,9 @@ def create_question_plan(
 
 
 # 오늘의 목표 & 연습 전 팁
-@router.get("/{interview_id}/question-plan/preview?mode=tech")
+@router.get("/{content_id}/question-plan/preview?mode=tech")
 def preview_question_plan(
-    interview_id: int,
+    content_id: int,
     mode: str,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
@@ -613,7 +730,7 @@ def preview_question_plan(
             detail={"message": "rate_limited", "detail": "Too many previews."},
         )
 
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -639,10 +756,130 @@ def preview_question_plan(
     return {"message": "plan_preview", "plan": plan}
 
 
+# 자소서 기반 면접 질문 생성
+@router.post("/question", tags=["interviews"])
+def create_interview_questions(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    자소서 기반 면접 질문 생성
+
+    Args:
+        payload: 요청 본문
+            - qas: 자소서 Q&A 리스트 (필수)
+            - content_id: 면접 컨텐츠 ID (필수)
+            - emit_confidence: 신뢰도 반환 여부 (사용 미정)
+            - use_seed: seed 사용 여부 (사용 미정)
+            - top_k_seed: top-k seed 값 (사용 미정)
+
+    Returns:
+        생성된 질문 개수와 성공 메시지
+    """
+    user_id = _require_user_id(authorization)
+
+    # 필수 파라미터 검증
+    if "qas" not in payload or not isinstance(payload["qas"], list):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "qas is required and must be a list"
+            }
+        )
+
+    if "content_id" not in payload or not isinstance(payload["content_id"], int):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "content_id is required and must be an integer"
+            }
+        )
+
+    qas = payload["qas"]
+    content_id = payload["content_id"]
+
+    # content 존재 및 권한 확인
+    content = db.get(Interview, content_id)
+    if not content:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "content_not_found"}
+        )
+    if content.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "forbidden",
+                "detail": "User not authorized for this content"
+            }
+        )
+
+    # QA 검증
+    if len(qas) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_request_body",
+                "detail": "qas must contain at least one item"
+            }
+        )
+
+    for qa in qas:
+        if not isinstance(qa, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "invalid_qa_format"}
+            )
+        if "q" not in qa or "a" not in qa:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "invalid_qa_format",
+                    "detail": "Each QA must have 'q' and 'a' fields"
+                }
+            )
+
+    # 질문 생성
+    try:
+        result = svc_question.generate_questions_from_qas(qas)
+        questions = result.get("questions", [])
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "question_generation_failed",
+                "detail": str(e)
+            }
+        )
+
+    # DB에 저장
+    saved_count = 0
+    for q in questions:
+        question_record = GeneratedQuestion(
+            content_id=content_id,
+            type=q.get("type", "job"),
+            text=q.get("text", ""),
+            is_used=False
+        )
+        db.add(question_record)
+        saved_count += 1
+
+    db.commit()
+
+    return {
+        "message": "questions_generated_successfully",
+        "content_id": content_id,
+        "generated_count": saved_count,
+    }
+
+
 # 면접 질문 생성 + 세션 시작
-@router.post("/{interview_id}/sessions/start", status_code=202)
+@router.post("/{content_id}/sessions/start", status_code=202)
 def start_generation_session(
-    interview_id: int,
+    content_id: int,
     payload: dict = Body(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
@@ -658,7 +895,7 @@ def start_generation_session(
             detail={"message": "rate_limited", "detail": "Too many generations."},
         )
 
-    i = db.query(Interview).get(interview_id)
+    i = db.query(Interview).get(content_id)
     if not i:
         raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
     if i.user_id != user_id:
@@ -668,7 +905,7 @@ def start_generation_session(
         )
 
     # 중복 실행 방지 (409)
-    if svc_gen.is_running(interview_id):
+    if svc_gen.is_running(content_id):
         raise HTTPException(
             status_code=409, detail={"message": "session_already_running"}
         )
@@ -732,13 +969,13 @@ def start_generation_session(
                 )
 
     # 세션 생성(DB) + 실행 마킹
-    sess = InterviewSession(interview_id=i.id, status="ongoing")
+    sess = InterviewSession(content_id=i.id, status="running")
     db.add(sess)
     db.commit()
     db.refresh(sess)
 
     # 동시실행 방지 락 세팅
-    svc_gen.mark_running(interview_id)
+    svc_gen.mark_running(content_id)
 
     # 생성 작업 ID들
     session_id, generation_id = svc_gen.new_ids()
