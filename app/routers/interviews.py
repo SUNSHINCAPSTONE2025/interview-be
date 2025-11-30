@@ -370,19 +370,22 @@ async def list_user_interviews(
 
 # B) 마이페이지: 면접 수정
 @router.patch("/{id}", tags=["mypage"])
-def update_interview(
+async def update_interview(
     id: int,
-    payload: dict = Body(...),
-    authorization: Optional[str] = Header(None),
+    payload: InterviewUpdate,
+    current = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    token_uid = _require_user_id(authorization)
+    # 1) 인터뷰 존재 여부 확인
+    interview = db.get(Interview, id)
+    if not interview:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "interview_not_found"},
+        )
 
-    # i: Optional[Interview] = db.query(Interview).get(id)
-    i = db.get(Interview, id)
-    if not i:
-        raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if i.user_id != token_uid:
+    # 2) 내 인터뷰인지 확인 (user_id 타입에 따라 str() 조정)
+    if str(interview.user_id) != current["id"]:
         raise HTTPException(
             status_code=403,
             detail={
@@ -391,58 +394,23 @@ def update_interview(
             },
         )
 
-    # 부분 업데이트
-    if "company" in payload:
-        if not isinstance(payload["company"], str) or not payload[
-            "company"
-        ].strip():
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_company"}
-            )
-        i.company = payload["company"].strip()
+    # 3) 수정할 필드 적용 (예시)
+    if payload.company is not None:
+        interview.company = payload.company
+    if payload.role is not None:
+        interview.role = payload.role
+    if payload.role_category is not None:
+        interview.role_category = payload.role_category
+    if payload.interview_date is not None:
+        interview.interview_date = payload.interview_date
+    if payload.jd_text is not None:
+        interview.jd_text = payload.jd_text
 
-    if "role" in payload:
-        if not isinstance(payload["role"], str) or not payload[
-            "role"
-        ].strip():
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_role"}
-            )
-        # DB에는 role 컬럼으로 저장
-        i.role = payload["role"].strip()
-
-    if "interview_date" in payload and payload["interview_date"] is not None:
-        try:
-            i.interview_date = datetime.strptime(
-                payload["interview_date"], "%Y-%m-%d"
-            ).date()
-        except Exception:
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_interview_date"}
-            )
-    elif "interview_date" in payload and payload["interview_date"] is None:
-        i.interview_date = None
-
-    db.add(i)
+    db.add(interview)
     db.commit()
-    db.refresh(i)
+    db.refresh(interview)
 
-    completed_sessions, total_sessions = _get_session_stats(db, i.id)
-
-    return {
-        "message": "interview_updated_successfully",
-        "interview": {
-            "id": i.id,
-            "company": i.company,
-            "role": i.role,
-            "interview_date": (
-                i.interview_date.isoformat() if i.interview_date else None
-            ),
-            "progress": _calc_progress(completed_sessions, total_sessions),
-            "completed_sessions": completed_sessions,
-            "total_sessions": total_sessions,
-        },
-    }
+    return _serialize_interview(interview, db)
 
 
 # C) 마이페이지: 면접 삭제
