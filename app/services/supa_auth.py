@@ -1,23 +1,16 @@
 # app/services/supa_auth.py
 from typing import Dict
-
 from jose import JWTError, jwt
 from app.config import settings
+import hashlib, logging
 
 SUPABASE_JWT_SECRET = settings.supabase_jwt_secret
 
 if not SUPABASE_JWT_SECRET:
     raise RuntimeError("SUPABASE_JWT_SECRET 환경변수가 설정되어 있지 않습니다.")
 
-# 🔍 디버그용: 시크릿 해시 일부를 로그로 남기기
-def _debug_log_secret_hash():
-    import hashlib, logging
-
-    h = hashlib.sha256(SUPABASE_JWT_SECRET.encode()).hexdigest()
-    logging.warning("JWT secret sha256 (first 12) = %s", h[:12])
-
-_debug_log_secret_hash()
-
+secret_hash = hashlib.sha256(SUPABASE_JWT_SECRET.encode()).hexdigest()
+logging.warning("JWT secret sha256 (first 12) = %s", secret_hash[:12])
 
 async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
     if not authorization:
@@ -43,8 +36,7 @@ async def verify_bearer(authorization: str | None) -> Dict[str, str | None]:
         )
     except JWTError as e:
         import logging
-
-        logging.exception("JWT decode failed")
+        logging.exception("JWT decode failed")  # 🔍 여기
         raise ValueError("invalid token") from e
 
     user_id = claims.get("sub")
