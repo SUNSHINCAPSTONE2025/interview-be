@@ -132,10 +132,10 @@ def list_contents(db: Session = Depends(get_db)):
 # 2) 메인: 진행률 업데이트
 @router.patch("/{id}/{progress}")
 def update_progress(
-    id: int = Path(..., ge=1),
-    progress: int = Path(..., ge=0, le=100),
-    payload: dict = Body(...),
-    db: Session = Depends(get_db),
+        id: int = Path(..., ge=1),
+        progress: int = Path(..., ge=0, le=100),
+        payload: dict = Body(...),
+        db: Session = Depends(get_db),
 ):
     # 1) 인터뷰 조회
     i: Optional[Interview] = db.query(Interview).get(id)
@@ -150,7 +150,7 @@ def update_progress(
 
     # 2) body 유효성 검사
     if "completed_sessions" not in payload or not isinstance(
-        payload["completed_sessions"], int
+            payload["completed_sessions"], int
     ):
         raise HTTPException(
             status_code=400,
@@ -161,10 +161,13 @@ def update_progress(
         )
     new_completed = payload["completed_sessions"]
 
-    # 3) 분모: session_max (sessions 테이블의 session_max 사용)
+    # 3) 분모: session_max (sessions 테이블에서 가져오기)
     session_row = (
         db.query(InterviewSession)
-        .filter(InterviewSession.interview_id == i.id)
+        .filter(
+            InterviewSession.user_id == i.user_id,
+            InterviewSession.content_id == i.content_id,
+        )
         .first()
     )
     if not session_row or session_row.session_max is None or session_row.session_max <= 0:
@@ -175,7 +178,6 @@ def update_progress(
                 "detail": "session_max must be a positive integer",
             },
         )
-
     max_sessions = session_row.session_max
 
     # 4) 완료 세션 개수 범위 체크 (0 ~ session_max)
@@ -190,7 +192,7 @@ def update_progress(
 
     # 5) 진행도 계산 (분모 = session_max)
     computed_progress = int(new_completed / max_sessions * 100)
-    i.progress = computed_progress  # Interview 테이블에는 progress(int) 만 저장
+    i.progress = computed_progress  # Interview 테이블에는 progress만 저장
 
     db.add(i)
     db.commit()
@@ -201,8 +203,7 @@ def update_progress(
         "interview": {
             "id": i.id,
             "progress": computed_progress,
-            # DB에 completed_sessions 컬럼은 없으니, 요청값을 그대로 내려줌
-            "completed_sessions": new_completed,
+            "completed_sessions": new_completed,  # DB 컬럼 없어도 응답에 그대로 내려줌
             "session_max": max_sessions,
         },
     }
