@@ -132,38 +132,83 @@ def list_contents(db: Session = Depends(get_db)):
 # 2) 메인: 진행률 업데이트
 @router.patch("/{id}/{progress}")
 def update_progress(
-    id: int = Path(..., ge=1),
-    progress: int = Path(..., ge=0, le=100),
-    payload: dict = Body(...,
-                         examples={
-                             "default": {
-                                 "summary": "진행도 업데이트 예시",
-                                 "value": {"completed_sessions": 5},
-                             }
-                         },
-                    ),
-    db: Session = Depends(get_db),
+        id: int = Path(..., ge=1),
+        progress: int = Path(..., ge=0, le=100),  # 경로로 받지만 실제 계산은 우리가 다시 함
+        payload: dict = Body(
+            ...,
+            examples={
+                "default": {
+                    "summary": "진행도 업데이트 예시",
+                    "value": {"completed_sessions": 5},
+                }
+            },
+        ),
+        db: Session = Depends(get_db),
 ):
+    # 1) 인터뷰 조회
     i: Optional[Interview] = db.query(Interview).get(id)
     if not i:
-        raise HTTPException(status_code=404, detail={"message": "interview_not_found",
-                                                     "detail": "The interview with the specified ID does not exist"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "interview_not_found",
+                "detail": "The interview with the specified ID does not exist",
+            },
+        )
 
-    # body 유효성 검사
-    if "completed_sessions" not in payload or not isinstance(payload["completed_sessions"], int):
-        raise HTTPException(status_code=400, detail={"message": "invalid_progress_value",
-                                                     "detail": "completed_sessions must be an integer"})
+    # 2) body 유효성 검사
+    if "completed_sessions" not in payload or not isinstance(
+            payload["completed_sessions"], int
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_progress_value",
+                "detail": "completed_sessions must be an integer",
+            },
+        )
     new_completed = payload["completed_sessions"]
-    if new_completed < 0 or new_completed > i.total_sessions:
-        raise HTTPException(status_code=400, detail={"message": "invalid_progress_value",
-                                                     "detail": "completed_sessions must be between 0 and total_sessions"})
 
-    # 업데이트
+    # 3) 분모: session_max
+    session = (
+        db.query(Session)
+        .filter(Session.interview_id == i.id)  # 인터뷰와 세션 연결 컬럼 이름에 맞게 수정
+        .first()
+    )
+    if not session or session.session_max is None or session.session_max <= 0:
+        ...
+    max_sessions = session.session_max
+    if max_sessions is None or max_sessions <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_session_max",
+                "detail": "session_max must be a positive integer",
+            },
+        )
+
+    # 4) 완료 세션 개수 범위 체크 (0 ~ session_max)
+    if new_completed < 0 or new_completed > max_sessions:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_progress_value",
+                "detail": f"completed_sessions must be between 0 and {max_sessions}",
+            },
+        )
+
+    # 5) 업데이트
     i.completed_sessions = new_completed
-    db.add(i); db.commit(); db.refresh(i)
+    # _calc_progress(완료 세션 수, session_max)를 쓰고 싶으면 이렇게:
+    computed_progress = _calc_progress(i.completed_sessions, max_sessions)
+    # 또는 직접 계산:
+    # computed_progress = int(new_completed / max_sessions * 100)
 
-    # 실제 진행률을 계산(경로의 {progress}와 불일치해도 계산값을 기준으로 응답)
-    computed_progress = _calc_progress(i.completed_sessions, i.total_sessions)
+    i.progress = computed_progress
+
+    db.add(i)
+    db.commit()
+    db.refresh(i)
 
     return {
         "message": "progress_updated_successfully",
@@ -171,7 +216,7 @@ def update_progress(
             "id": i.id,
             "progress": computed_progress,
             "completed_sessions": i.completed_sessions,
-            "total_sessions": i.total_sessions,
+            "session_max": max_sessions,
         },
     }
 
