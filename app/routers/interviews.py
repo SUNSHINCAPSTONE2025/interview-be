@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional, List, Tuple, Dict
 
 from fastapi import (
@@ -218,29 +218,19 @@ def update_progress(
 def start_session(
     id: int,
     payload: dict = Body(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    세션 시작 및 질문 선택
-
-    - practice_type에 따라 해당 타입의 질문만 선택
-    - BasicQuestion에서 3개 랜덤 선택 (해당 type)
-    - GeneratedQuestion에서 2개 랜덤 선택 (is_used=False, 해당 type)
-    - 총 5개 질문을 SessionQuestion에 저장
-    - 질문 텍스트와 함께 반환
-    """
-    # practice_type 검증
     practice_type = payload.get("practice_type")
     if practice_type not in ["job", "soft"]:
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "invalid_request_body",
-                "detail": "practice_type must be one of ['job', 'soft']"
-            }
+                "detail": "practice_type must be one of ['job', 'soft']",
+            },
         )
 
-    # i: Optional[Interview] = db.query(Interview).get(id)
+    # 1) 인터뷰 조회
     i = db.get(Interview, id)
     if not i:
         raise HTTPException(
@@ -251,12 +241,7 @@ def start_session(
             },
         )
 
-    # 세션 생성
-    s = InterviewSession(user_id=i.user_id, content_id=i.id, status="draft")
-    db.add(s)
-    db.flush()  # s.id 생성
-
-    # 1. BasicQuestion 3개 랜덤 선택 (practice_type 필터링)
+    # 2) 질문 뽑기
     basic_questions = (
         db.query(BasicQuestion)
         .filter(BasicQuestion.type == practice_type)
@@ -264,84 +249,96 @@ def start_session(
         .limit(3)
         .all()
     )
-
     if len(basic_questions) < 3:
-        db.rollback()
         raise HTTPException(
             status_code=500,
             detail={
                 "message": "insufficient_basic_questions",
-                "detail": f"Need at least 3 basic questions of type '{practice_type}', found {len(basic_questions)}"
-            }
+                "detail": f"Need at least 3 basic questions of type '{practice_type}', "
+                          f"found {len(basic_questions)}",
+            },
         )
 
-    # 2. GeneratedQuestion 2개 랜덤 선택 (is_used=False, practice_type 필터링)
     generated_questions = (
         db.query(GeneratedQuestion)
         .filter(
             GeneratedQuestion.content_id == i.id,
             GeneratedQuestion.is_used == False,
-            GeneratedQuestion.type == practice_type
+            GeneratedQuestion.type == practice_type,
         )
         .order_by(func.random())
         .limit(2)
         .all()
     )
-
     if len(generated_questions) < 2:
-        db.rollback()
         raise HTTPException(
             status_code=500,
             detail={
                 "message": "insufficient_generated_questions",
-                "detail": f"Need at least 2 unused generated questions of type '{practice_type}' for content_id={i.id}, found {len(generated_questions)}"
-            }
+                "detail": (
+                    f"Need at least 2 unused generated questions of type "
+                    f"'{practice_type}' for content_id={i.id}, "
+                    f"found {len(generated_questions)}"
+                ),
+            },
         )
 
-    # 3. GeneratedQuestion의 is_used를 True로 업데이트
-    for gq in generated_questions:
-        gq.is_used = True
+    # payload용 리스트
+    all_questions_payload = []
 
-    # 4. SessionQuestion에 저장
-    all_questions = []
+    # 세션에서 사용할 전체 질문 수
+    session_max = len(basic_questions) + len(generated_questions)
 
-    # BasicQuestion 추가
-    for idx, bq in enumerate(basic_questions):
+    # 3) 세션 row 생성 (NOT NULL 필드 다 채우기)
+    now = datetime.now(timezone.utc)
+    s = InterviewSession(
+        user_id=i.user_id,
+        content_id=i.id,
+        status="draft",
+        started_at=now,
+        session_max=session_max,
+    )
+    db.add(s)
+    db.flush()  # s.id 확보
+
+    # 4) SessionQuestion 레코드 + payload 구성
+    # BasicQuestion
+    for order_no, bq in enumerate(basic_questions, start=1):
         sq = SessionQuestion(
             session_id=s.id,
             question_type="BASIC",
             question_id=bq.id,
-            order_no=idx + 1
+            order_no=order_no,
         )
         db.add(sq)
-        all_questions.append({
-            "id": sq.id if sq.id else None,
+        all_questions_payload.append({
             "question_type": "BASIC",
             "question_id": bq.id,
-            "order_no": idx + 1,
+            "order_no": order_no,
             "text": bq.text,
-            "type": bq.type
+            "type": bq.type,
         })
 
-    # GeneratedQuestion 추가
-    for idx, gq in enumerate(generated_questions):
+    # GeneratedQuestion
+    for idx, gq in enumerate(generated_questions, start=1):
+        order_no = len(basic_questions) + idx
         sq = SessionQuestion(
             session_id=s.id,
             question_type="GENERATED",
             question_id=gq.id,
-            order_no=len(basic_questions) + idx + 1
+            order_no=order_no,
         )
         db.add(sq)
-        all_questions.append({
-            "id": sq.id if sq.id else None,
+        gq.is_used = True  # 재사용 방지
+
+        all_questions_payload.append({
             "question_type": "GENERATED",
             "question_id": gq.id,
-            "order_no": len(basic_questions) + idx + 1,
+            "order_no": order_no,
             "text": gq.text,
-            "type": gq.type
+            "type": gq.type,
         })
 
-    s.session_max = len(all_questions)
     db.commit()
     db.refresh(s)
 
@@ -350,7 +347,8 @@ def start_session(
         "session_id": s.id,
         "content_id": i.id,
         "status": s.status,
-        "questions": all_questions
+        "session_max": session_max,
+        "questions": all_questions_payload,
     }
 
 
