@@ -18,8 +18,8 @@ from app.services.voice_analysis_service import analyze_voice_from_storage_url
 
 
 router = APIRouter(
-    prefix="/api/sessions",
-    tags=["sessions-voice"],
+    prefix="/api/feedback",
+    tags=["voice-feedback"],
 )
 
 
