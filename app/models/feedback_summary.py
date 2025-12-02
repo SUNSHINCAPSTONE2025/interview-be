@@ -5,6 +5,7 @@ class FeedbackSummary(Base):
     __tablename__ = "feedback_summary"
 
     session_id = Column(BigInteger, ForeignKey("sessions.id"), primary_key=True, index=True)  # 1:1 with sessions.id
+    attempt_id = Column(BigInteger, ForeignKey("attempts.id"), primary_key=True, index=True)
 
     overall = Column(Numeric(5, 2), nullable=True)
     overall_face = Column(Numeric(5, 2), nullable=True)

@@ -28,7 +28,10 @@ router = APIRouter(
 def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> InterviewSession:
     session_obj = (
         db.query(InterviewSession)
-        .filter(InterviewSession.id == session_id, InterviewSession.user_id == user_id)
+        .filter(
+            InterviewSession.id == session_id,
+            InterviewSession.user_id == user_id,
+        )
         .first()
     )
     if not session_obj:
@@ -37,24 +40,18 @@ def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> Interv
 
 
 
-def _get_audio_storage_url(db: OrmSession, session_id: int) -> str:
-    """
-    해당 세션의 audio MediaAsset(kind=3) 중 가장 최근 것을 사용.
-    나중에 질문별/시도별로 나누고 싶으면 attempt_id, session_question_id도 조건에 추가하면 됨.
-    """
-    asset = (
-        db.query(MediaAsset)
-        .filter(
-            MediaAsset.session_id == session_id,
-            MediaAsset.kind == 3,  # audio
-        )
-        .order_by(MediaAsset.created_at.desc())
-        .first()
+def _get_audio_storage_url(db: OrmSession, session_id: int, attempt_id: int) -> str:
+    q = db.query(MediaAsset).filter(
+        MediaAsset.session_id == session_id,
+        MediaAsset.kind == 3,  # audio
+        MediaAsset.attempt_id == attempt_id,
     )
+
+    asset = q.order_by(MediaAsset.created_at.desc()).first()
     if not asset:
         raise HTTPException(
             status_code=400,
-            detail="No audio media asset found for this session",
+            detail="No audio media asset found for this session/attempt",
         )
     return asset.storage_url
 
@@ -104,18 +101,19 @@ def _analyze_voice(audio_path: str) -> Dict[str, Any]:
 @router.post("/{session_id}/voice-feedback", response_model=Dict[str, Any])
 def create_or_update_voice_feedback_endpoint(
     session_id: int,
+    attempt_id: int,
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     _get_session_or_404(db, session_id, current_user["id"])
 
-    storage_url = _get_audio_storage_url(db, session_id)
+    storage_url = _get_audio_storage_url(db, session_id, attempt_id)
 
     # storage_url → 실제 wav/mp3 로드 → 분석 → payload 생성
     voice_payload = analyze_voice_from_storage_url(storage_url)
 
     # feedback_summary 테이블에 overall_voice, tremor, blank, tone, speed, comment 저장
-    create_or_update_voice_feedback(db, session_id, voice_payload)
+    create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
 
     return voice_payload
 
@@ -125,21 +123,18 @@ def create_or_update_voice_feedback_endpoint(
 @router.get("/{session_id}/voice-feedback", response_model=Dict[str, Any])
 def get_voice_feedback_endpoint(
     session_id: int,
+    attempt_id: int,
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """
-    이미 계산/저장된 feedback_summary 기반으로
-    - total_score
-    - metrics (tremor/pause/tone/speed)
-    - summary
-    만 간단히 조회
-    """
     _get_session_or_404(db, session_id, current_user["id"])
 
     fs = (
         db.query(FeedbackSummary)
-        .filter(FeedbackSummary.session_id == session_id)
+        .filter(
+            FeedbackSummary.session_id == session_id,
+            FeedbackSummary.attempt_id == attempt_id,
+        )
         .first()
     )
     if not fs:

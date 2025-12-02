@@ -100,15 +100,28 @@ def generate_feedback_json(df, problem_sections, fps=30, min_duration=1.0,
 
     return json_data
 
+# (2) 공통 FeedbackSummary 헬퍼
+def get_or_create_feedback_summary(db, session_id: int, attempt_id: int,) -> FeedbackSummary:
+    fs = db.query(FeedbackSummary).filter(
+        FeedbackSummary.session_id == session_id,
+        FeedbackSummary.attempt_id == attempt_id
+    ).first()
+    if not fs:
+        fs = FeedbackSummary(
+            session_id=session_id,
+            attempt_id=attempt_id,
+        )
+        db.add(fs)
+        db.flush()  # PK 채우기
 
-def create_or_update_pose_feedback(db, session_id: int, pose_json: dict):
+    return fs
+
+def create_or_update_pose_feedback(db, session_id: int, attempt_id: int, pose_json: dict):
     """
     pose_json: generate_feedback_json() 결과
     DB의 feedback_summary.session_id에 생성 또는 업데이트
     """
-    fs = db.query(FeedbackSummary).filter(FeedbackSummary.session_id == session_id).first()
-    if fs is None:
-        fs = FeedbackSummary(session_id=session_id)
+    fs = get_or_create_feedback_summary(db, session_id, attempt_id)
 
     fs.overall_pose = pose_json.get("overall_score")
     fs.shoulder = pose_json.get("category_scores", {}).get("shoulder", {}).get("value")
@@ -121,32 +134,8 @@ def create_or_update_pose_feedback(db, session_id: int, pose_json: dict):
     db.commit()
     return fs
 
-# (2) 공통 FeedbackSummary 헬퍼
-def get_or_create_feedback_summary(db, session_id: int) -> FeedbackSummary:
-    fs = db.query(FeedbackSummary).filter(
-        FeedbackSummary.session_id == session_id
-    ).first()
-    if fs is None:
-        fs = FeedbackSummary(session_id=session_id)
-        db.add(fs)
-        db.commit()
-        db.refresh(fs)
-    return fs
-
-# (3) 목소리 피드백 관련
-def create_or_update_voice_feedback(db, session_id: int, voice_json: dict) -> FeedbackSummary:
-    """
-    voice_json: vocal_feedback에서 만들어준 payload
-      - total_score
-      - summary
-      - metrics: [
-          {"id": "tremor", "score": ...},
-          {"id": "pause", "score": ...},
-          {"id": "tone", "score": ...},
-          {"id": "speed", "score": ...},
-        ]
-    """
-    fs = get_or_create_feedback_summary(db, session_id)
+def create_or_update_voice_feedback(db, session_id: int, attempt_id: int, voice_json: dict) -> FeedbackSummary:
+    fs = get_or_create_feedback_summary(db, session_id, attempt_id)
 
     fs.overall_voice = voice_json.get("total_score")
 

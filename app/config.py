@@ -1,22 +1,14 @@
 # app/config.py
 
-# ------------------------
-# .env 읽기
-# ------------------------
+
 from dotenv import load_dotenv
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()  # feat#6 방식 유지: .env 파일 먼저 읽기
 
-# ------------------------
-# 프로젝트 루트 계산
-# ------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent  # C:\interviewBE\interview-be
 
-# ------------------------
-# Pydantic Settings 정의
-# ------------------------
 class Settings(BaseSettings):
     # 환경 구분
     app_env: str = "local"
@@ -44,14 +36,8 @@ class Settings(BaseSettings):
         extra="ignore",                   # 필요 없는 env 무시
     )
 
-# ------------------------
-# 설정 인스턴스 생성
-# ------------------------
 settings = Settings()
 
-# ------------------------
-# 테스트용: 직접 실행 시
-# ------------------------
 if __name__ == "__main__":
     print("BASE_DIR:", BASE_DIR)
     print("DATABASE_URL:", settings.database_url)

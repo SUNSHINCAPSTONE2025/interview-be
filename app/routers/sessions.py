@@ -47,10 +47,20 @@ def deprecated_route():
 
 @router.post("/{content_id}/start")
 def session_start(content_id: int, payload: StartIn):
-    if not payload.use_saved_context and not (payload.override_context and payload.override_context.questions):
-        raise HTTPException(status_code=400, detail="Provide override_context.questions or enable use_saved_context")
+    if not payload.use_saved_context and not (
+        payload.override_context and payload.override_context.questions
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide override_context.questions or enable use_saved_context",
+        )
     # TODO: 생성 작업 큐잉
-    return {"message":"generation_started","session_id":"sess_9a12","generation_id":"gen_73bc","status":"pending"}
+    return {
+        "message": "generation_started",
+        "session_id": "sess_9a12",
+        "generation_id": "gen_73bc",
+        "status": "pending",
+    }
 
 @router.post("/{session_id}/finish")
 def session_finish(session_id: str):
@@ -68,33 +78,33 @@ async def upload_recording(
     db: Session = Depends(get_db),
     user = Depends(get_current_user)
 ):
-    """
-    질문 녹화 파일 업로드
-
-    FE에서 MediaRecorder로 녹화한 영상(video+audio 통합 webm)을 받아서:
-    1. Supabase Storage에 업로드
-    2. Attempt 레코드 생성
-    3. MediaAsset 레코드 생성
-
-    Args:
-        session_id: 세션 ID
-        question_index: 질문 번호 (0부터 시작)
-        file: 녹화 파일 (webm)
-
-    Returns:
-        업로드 성공 정보 (attempt_id, storage_url 등)
-    """
-
     # 1. 세션 존재 및 권한 확인
-    session = db.query(InterviewSession).filter(
-        InterviewSession.id == session_id
-    ).first()
+    session = (
+        db.query(InterviewSession)
+        .filter(InterviewSession.id == session_id)
+        .first()
+    )
 
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
 
     if session.user_id != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
+
+    # 1-1. question_index → 실제 SessionQuestion.id 로 매핑
+    sq = (
+        db.query(SessionQuestion)
+        .filter(
+            SessionQuestion.session_id == session_id,
+            SessionQuestion.order_no == question_index,  # order_no가 1부터면 여기를 question_index + 1 로 바꿔줘
+        )
+        .first()
+    )
+    if not sq:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_question_index_for_session",
+        )
 
     # 2. 임시 파일 저장
     tmp_path = None
@@ -153,34 +163,23 @@ async def upload_recording(
         )
 
     finally:
-        # 임시 파일 삭제
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 
-# ========================================
-# 새로운 API 엔드포인트
-# ========================================
-
+# 세션 상세 조회 (질문 목록 포함)
 @router.get("/{session_id}")
 def get_session(
     session_id: int,
     db: Session = Depends(get_db),
     user = Depends(get_current_user)
 ):
-    """
-    세션 상세 조회 (질문 목록 포함)
-
-    Args:
-        session_id: 세션 ID
-
-    Returns:
-        세션 정보 + 질문 목록 (텍스트 포함)
-    """
     # 세션 조회
-    session = db.query(InterviewSession).filter(
-        InterviewSession.id == session_id
-    ).first()
+    session = (
+        db.query(InterviewSession)
+        .filter(InterviewSession.id == session_id)
+        .first()
+    )
 
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
@@ -190,9 +189,12 @@ def get_session(
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 세션 질문 조회
-    session_questions = db.query(SessionQuestion).filter(
-        SessionQuestion.session_id == session_id
-    ).order_by(SessionQuestion.order_no).all()
+    session_questions = (
+        db.query(SessionQuestion)
+        .filter(SessionQuestion.session_id == session_id)
+        .order_by(SessionQuestion.order_no)
+        .all()
+    )
 
     # 질문 텍스트 포함
     questions = []
@@ -236,27 +238,22 @@ def get_session(
         "questions": questions,
     }
 
-
+# 컨텐츠별 세션 목록 조회 (최신순)
 @router.get("")
 def list_sessions(
     content_id: int = Query(..., description="컨텐츠 ID"),
     db: Session = Depends(get_db),
     user = Depends(get_current_user)
 ):
-    """
-    컨텐츠별 세션 목록 조회
-
-    Args:
-        content_id: 컨텐츠(면접) ID
-
-    Returns:
-        세션 목록 (최신순)
-    """
-    # 세션 목록 조회 (최신순)
-    sessions = db.query(InterviewSession).filter(
-        InterviewSession.content_id == content_id,
-        InterviewSession.user_id == user["id"]  # 권한 확인
-    ).order_by(InterviewSession.created_at.desc()).all()
+    sessions = (
+        db.query(InterviewSession)
+        .filter(
+            InterviewSession.content_id == content_id,
+            InterviewSession.user_id == user["id"],
+        )
+        .order_by(InterviewSession.created_at.desc())
+        .all()
+    )
 
     return [
         {
@@ -273,7 +270,7 @@ def list_sessions(
         for s in sessions
     ]
 
-
+# 세션 상태 업데이트
 @router.patch("/{session_id}/status")
 def update_session_status(
     session_id: int,
@@ -281,20 +278,12 @@ def update_session_status(
     db: Session = Depends(get_db),
     user = Depends(get_current_user)
 ):
-    """
-    세션 상태 업데이트
-
-    Args:
-        session_id: 세션 ID
-        payload: 업데이트할 필드 (status, started_at, ended_at)
-
-    Returns:
-        업데이트된 세션 정보
-    """
     # 세션 조회
-    session = db.query(InterviewSession).filter(
-        InterviewSession.id == session_id
-    ).first()
+    session = (
+        db.query(InterviewSession)
+        .filter(InterviewSession.id == session_id)
+        .first()
+    )
 
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
