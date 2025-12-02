@@ -1,7 +1,6 @@
 from datetime import date, datetime
 from typing import Optional, List, Tuple, Dict
 
-from Tools.scripts.patchcheck import status
 from fastapi import (
     APIRouter,
     Depends,
