@@ -777,6 +777,7 @@ def preview_question_plan(
 
 
 # 자소서 기반 면접 질문 생성
+@router.post("/question", tags=["interviews"])
 def create_interview_questions(
     payload: dict = Body(...),
     current = Depends(get_current_user),
