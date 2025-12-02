@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from typing import Optional, List, Tuple, Dict
 
+from Tools.scripts.patchcheck import status
 from fastapi import (
     APIRouter,
     Depends,
@@ -252,7 +253,7 @@ def start_session(
         )
 
     # 세션 생성
-    s = InterviewSession(content_id=i.id, status="draft")
+    s = InterviewSession(user_id=i.user_id, content_id=i.id, status="draft")
     db.add(s)
     db.flush()  # s.id 생성
 
@@ -341,6 +342,7 @@ def start_session(
             "type": gq.type
         })
 
+    s.session_max = len(all_questions)
     db.commit()
     db.refresh(s)
 
