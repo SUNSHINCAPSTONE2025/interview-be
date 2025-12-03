@@ -159,7 +159,7 @@ def start_session(
     # 2) 질문 뽑기
     basic_questions = (
         db.query(BasicQuestion)
-        .filter(BasicQuestion.type == practice_type)
+        .filter(BasicQuestion.label == practice_type)
         .order_by(func.random())
         .limit(3)
         .all()
