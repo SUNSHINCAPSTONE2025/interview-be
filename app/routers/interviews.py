@@ -697,12 +697,12 @@ def create_question_plan(
     mode = payload.get("mode")
     count = payload.get("count", 5)
 
-    if mode not in ["tech", "soft"]:
+    if mode not in ["job", "soft"]:
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "invalid_request_body",
-                "detail": "mode must be one of ['tech','soft','both']",
+                "detail": "mode must be one of ['job','soft']",
             },
         )
 
@@ -759,12 +759,12 @@ def preview_question_plan(
             detail={"message": "forbidden", "detail": "User not authorized"},
         )
 
-    if mode not in ["tech", "soft", "both"]:
+    if mode not in ["job", "soft", "both"]:
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "invalid_request_query",
-                "detail": "mode must be one of ['tech','soft','both']",
+                "detail": "mode must be one of ['job','soft','both']",
             },
         )
 
@@ -777,6 +777,7 @@ def preview_question_plan(
 
 
 # 자소서 기반 면접 질문 생성
+@router.post("/question", tags=["interviews"])
 def create_interview_questions(
     payload: dict = Body(...),
     current = Depends(get_current_user),

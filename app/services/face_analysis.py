@@ -439,20 +439,21 @@ def analyze_expression_video(
 # 세션 단위 분석 + DB 저장 + 응답 생성
 async def run_expression_analysis_for_session(
     session_id: int,
+    attempt_id: int,
     blink_limit_per_min: int,
     baseline_seconds: float,
     frame_stride: int,
     db: Session,
 ) -> Dict:
     
-    # media_asset에서 이 세션의 영상 찾기
+    # media_asset에서 이 세션의 영상 찾기 (attempt 단위)
     media: Optional[MediaAsset] = (
         db.query(MediaAsset)
         .filter(
             MediaAsset.session_id == session_id,
+            MediaAsset.attempt_id == attempt_id,
             MediaAsset.kind == 0,
         )
-        .order_by(MediaAsset.id.desc())
         .first()
     )
 
@@ -490,15 +491,10 @@ async def run_expression_analysis_for_session(
         except OSError:
             pass
 
-    # feedback_summary 테이블 저장/업데이트
-    summary: Optional[FeedbackSummary] = (
-        db.query(FeedbackSummary)
-        .filter(FeedbackSummary.session_id == session_id)
-        .first()
-    )
+    # feedback_summary 테이블 저장/업데이트 (attempt 단위)
+    from app.services.feedback_service import get_or_create_feedback_summary
 
-    if summary is None:
-        summary = FeedbackSummary(session_id=session_id)
+    summary = get_or_create_feedback_summary(db, session_id, attempt_id)
 
     summary.overall_face = res["overall_score"]
     summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
@@ -513,6 +509,7 @@ async def run_expression_analysis_for_session(
     body = {
         "message": "expression_analysis_success",
         "session_id": session_id,
+        "attempt_id": attempt_id,
         "overall_score": res["overall_score"],
         "expression_analysis": res["expression_analysis"],
         "feedback_summary": res["feedback_summary"],
