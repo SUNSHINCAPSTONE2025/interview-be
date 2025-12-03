@@ -62,14 +62,6 @@ def session_start(content_id: int, payload: StartIn):
         "status": "pending",
     }
 
-@router.post("/{session_id}/finish")
-def session_finish(session_id: str):
-    # TODO: 세션 상태 검증, 기록 집계
-    return {"message":"session_finished","record_id":9901,
-            "summary":{"score":82,"highlights":["구체적 예시 제시","안정적인 목소리"],
-                       "areas_for_improvement":["키 메시지 반복","속도 조절"]}}
-
-
 @router.post("/{session_id}/recordings/{question_index}")
 async def upload_recording(
     session_id: int,
@@ -319,3 +311,14 @@ def update_session_status(
         "started_at": session.started_at.isoformat() if session.started_at else None,
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
     }
+
+# 사용하지 않는 api 엔드포인트
+'''
+@router.post("/{session_id}/finish")
+def session_finish(session_id: str):
+    # TODO: 세션 상태 검증, 기록 집계
+    return {"message":"session_finished","record_id":9901,
+            "summary":{"score":82,"highlights":["구체적 예시 제시","안정적인 목소리"],
+                       "areas_for_improvement":["키 메시지 반복","속도 조절"]}}
+
+'''

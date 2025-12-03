@@ -8,7 +8,8 @@ from app.models.records import PracticeRecord
 
 router = APIRouter(prefix="/api", tags=["records"])
 
-
+# 사용하지 않는 api 엔드포인트
+'''
 # (1) 마이페이지: 연습 기록 목록
 # GET /api/users/{user_id}/records
 @router.get("/users/{user_id}/records")
@@ -53,8 +54,6 @@ def list_records(
         }
         for r in items
     ]
-
-
 # (2) 마이페이지: 피드백 보기
 # GET /api/records/{record_id}
 @router.get("/records/{record_id}")
@@ -89,3 +88,4 @@ def get_record(
         "score": r.score,
         "questions": r.questions or [],
     }
+'''

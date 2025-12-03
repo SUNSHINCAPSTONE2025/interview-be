@@ -128,92 +128,7 @@ def list_contents(db: Session = Depends(get_db)):
         )
     return results
 
-
-# 2) 메인: 진행률 업데이트
-@router.patch("/{id}/{progress}")
-def update_progress(
-        id: int = Path(..., ge=1),
-        progress: int = Path(..., ge=0, le=100),  # URL 경로에 있지만 실제 계산에는 안 씀
-        payload: dict = Body(...),
-        db: Session = Depends(get_db),
-):
-    # 1) 인터뷰 조회
-    i: Optional[Interview] = db.query(Interview).get(id)
-    if not i:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "interview_not_found",
-                "detail": "The interview with the specified ID does not exist",
-            },
-        )
-
-    # 2) body 유효성 검사
-    if "completed_sessions" not in payload or not isinstance(
-            payload["completed_sessions"], int
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_progress_value",
-                "detail": "completed_sessions must be an integer",
-            },
-        )
-    new_completed = payload["completed_sessions"]
-
-    # 3) 분모: session_max (Interview.sessions 관계에서 가져오기)
-    if not i.sessions:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "session_not_found",
-                "detail": "No sessions found for this interview",
-            },
-        )
-
-    # 세션이 여러 개라면 일단 첫 번째 세션 기준으로 사용
-    session_row: InterviewSession = i.sessions[0]
-
-    if session_row.session_max is None or session_row.session_max <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_session_max",
-                "detail": "session_max must be a positive integer",
-            },
-        )
-
-    max_sessions = session_row.session_max
-
-    # 4) 완료 세션 개수 범위 체크 (0 ~ session_max)
-    if new_completed < 0 or new_completed > max_sessions:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_progress_value",
-                "detail": f"completed_sessions must be between 0 and {max_sessions}",
-            },
-        )
-
-    # 5) 진행도 계산 (분모 = session_max)
-    computed_progress = int(new_completed / max_sessions * 100)
-
-    db.add(i)
-    db.commit()
-    db.refresh(i)
-
-    return {
-        "message": "progress_updated_successfully",
-        "interview": {
-            "id": i.id,
-            "progress": computed_progress,        # 계산된 진행도(%)
-            "completed_sessions": new_completed,  # 이번 요청에서 받은 값
-            "session_max": max_sessions,          # 분모
-        },
-    }
-
-
-# 4) 메인: 연습 시작
+# 3) 메인: 연습 시작
 @router.post("/{id}/sessions/start")
 def start_session(
     id: int,
@@ -350,142 +265,6 @@ def start_session(
         "session_max": session_max,
         "questions": all_questions_payload,
     }
-
-
-# 마이페이지
-# A) 마이페이지: 특정 사용자 인터뷰 목록
-@router.get("/users/{user_id}/interviews", tags=["mypage"])
-async def list_user_interviews(
-    user_id: str,
-    current = Depends(get_current_user),   
-    db: Session = Depends(get_db),
-):
-    # 1) 토큰의 user_id 와 path 의 user_id가 같은지 체크
-    if current["id"] != user_id:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "forbidden",
-                "detail": "User not authorized to access this resource",
-            },
-        )
-
-    # 2) 이 user_id의 인터뷰 조회
-    items = (
-        db.query(Interview)
-        .filter(Interview.user_id == user_id)
-        .order_by(Interview.id.desc())
-        .all()
-    )
-
-    if not items:
-        raise HTTPException(
-            status_code=404,
-            detail={"message": "interviews_not_found"},
-        )
-
-    return [_serialize_interview(i, db) for i in items]
-
-
-# B) 마이페이지: 면접 수정
-@router.patch("/{id}", tags=["mypage"])
-def update_interview(
-    id: int,
-    payload: dict = Body(...),
-    current = Depends(get_current_user),   # 🔹 authorization 대신 이거
-    db: Session = Depends(get_db),
-):
-    # 🔹 토큰에서 user_id 가져오는 부분 대체
-    token_uid = current["id"]
-
-    # i: Optional[Interview] = db.query(Interview).get(id)
-    i = db.get(Interview, id)
-    if not i:
-        raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if str(i.user_id) != token_uid:        # 🔹 타입 맞춰 str() 한 번 감싸는 게 안전
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "forbidden",
-                "detail": "User not authorized to access this resource",
-            },
-        )
-
-    # 부분 업데이트
-    if "company" in payload:
-        if not isinstance(payload["company"], str) or not payload["company"].strip():
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_company"}
-            )
-        i.company = payload["company"].strip()
-
-    if "role" in payload:
-        if not isinstance(payload["role"], str) or not payload["role"].strip():
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_role"}
-            )
-        # DB에는 role 컬럼으로 저장
-        i.role = payload["role"].strip()
-
-    if "interview_date" in payload and payload["interview_date"] is not None:
-        try:
-            i.interview_date = datetime.strptime(
-                payload["interview_date"], "%Y-%m-%d"
-            ).date()
-        except Exception:
-            raise HTTPException(
-                status_code=400, detail={"message": "invalid_interview_date"}
-            )
-    elif "interview_date" in payload and payload["interview_date"] is None:
-        i.interview_date = None
-
-    db.add(i)
-    db.commit()
-    db.refresh(i)
-
-    completed_sessions, total_sessions = _get_session_stats(db, i.id)
-
-    return {
-        "message": "interview_updated_successfully",
-        "interview": {
-            "id": i.id,
-            "company": i.company,
-            "role": i.role,
-            "interview_date": (
-                i.interview_date.isoformat() if i.interview_date else None
-            ),
-            "progress": _calc_progress(completed_sessions, total_sessions),
-            "completed_sessions": completed_sessions,
-            "total_sessions": total_sessions,
-        },
-    }
-
-
-# C) 마이페이지: 면접 삭제
-@router.delete("/{id}", tags=["mypage"])
-def delete_interview(
-    id: int,
-    current = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    token_uid = current["id"]
-
-    # i: Optional[Interview] = db.query(Interview).get(id)
-    i = db.get(Interview, id)
-    if not i:
-        raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
-    if str(i.user_id) != token_uid:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "forbidden",
-                "detail": "User not authorized to delete this interview",
-            },
-        )
-
-    db.delete(i)
-    db.commit()
-    return {"message": "interview_deleted_successfully"}
 
 # 면접 등록 페이지
 # 면접 정보 등록: POST /api/interviews/contents
@@ -996,3 +775,222 @@ def start_generation_session(
         "status": "pending",
         "estimated_duration_minutes": svc_gen.estimated_minutes(),
     }
+
+# ===== 사용하지 않는 api =====
+'''
+# 마이페이지
+# A) 마이페이지: 특정 사용자 인터뷰 목록
+@router.get("/users/{user_id}/interviews", tags=["mypage"])
+async def list_user_interviews(
+    user_id: str,
+    current = Depends(get_current_user),   
+    db: Session = Depends(get_db),
+):
+    # 1) 토큰의 user_id 와 path 의 user_id가 같은지 체크
+    if current["id"] != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "forbidden",
+                "detail": "User not authorized to access this resource",
+            },
+        )
+
+    # 2) 이 user_id의 인터뷰 조회
+    items = (
+        db.query(Interview)
+        .filter(Interview.user_id == user_id)
+        .order_by(Interview.id.desc())
+        .all()
+    )
+
+    if not items:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "interviews_not_found"},
+        )
+
+    return [_serialize_interview(i, db) for i in items]
+
+# 2) 메인: 진행률 업데이트
+@router.patch("/{id}/{progress}")
+def update_progress(
+        id: int = Path(..., ge=1),
+        progress: int = Path(..., ge=0, le=100),  # URL 경로에 있지만 실제 계산에는 안 씀
+        payload: dict = Body(...),
+        db: Session = Depends(get_db),
+):
+    # 1) 인터뷰 조회
+    i: Optional[Interview] = db.query(Interview).get(id)
+    if not i:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "interview_not_found",
+                "detail": "The interview with the specified ID does not exist",
+            },
+        )
+
+    # 2) body 유효성 검사
+    if "completed_sessions" not in payload or not isinstance(
+            payload["completed_sessions"], int
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_progress_value",
+                "detail": "completed_sessions must be an integer",
+            },
+        )
+    new_completed = payload["completed_sessions"]
+
+    # 3) 분모: session_max (Interview.sessions 관계에서 가져오기)
+    if not i.sessions:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "session_not_found",
+                "detail": "No sessions found for this interview",
+            },
+        )
+
+    # 세션이 여러 개라면 일단 첫 번째 세션 기준으로 사용
+    session_row: InterviewSession = i.sessions[0]
+
+    if session_row.session_max is None or session_row.session_max <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_session_max",
+                "detail": "session_max must be a positive integer",
+            },
+        )
+
+    max_sessions = session_row.session_max
+
+    # 4) 완료 세션 개수 범위 체크 (0 ~ session_max)
+    if new_completed < 0 or new_completed > max_sessions:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "invalid_progress_value",
+                "detail": f"completed_sessions must be between 0 and {max_sessions}",
+            },
+        )
+
+    # 5) 진행도 계산 (분모 = session_max)
+    computed_progress = int(new_completed / max_sessions * 100)
+
+    db.add(i)
+    db.commit()
+    db.refresh(i)
+
+    return {
+        "message": "progress_updated_successfully",
+        "interview": {
+            "id": i.id,
+            "progress": computed_progress,        # 계산된 진행도(%)
+            "completed_sessions": new_completed,  # 이번 요청에서 받은 값
+            "session_max": max_sessions,          # 분모
+        },
+    }
+    
+# B) 마이페이지: 면접 수정
+@router.patch("/{id}", tags=["mypage"])
+def update_interview(
+    id: int,
+    payload: dict = Body(...),
+    current = Depends(get_current_user),   # 🔹 authorization 대신 이거
+    db: Session = Depends(get_db),
+):
+    # 🔹 토큰에서 user_id 가져오는 부분 대체
+    token_uid = current["id"]
+
+    # i: Optional[Interview] = db.query(Interview).get(id)
+    i = db.get(Interview, id)
+    if not i:
+        raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
+    if str(i.user_id) != token_uid:        # 🔹 타입 맞춰 str() 한 번 감싸는 게 안전
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "forbidden",
+                "detail": "User not authorized to access this resource",
+            },
+        )
+
+    # 부분 업데이트
+    if "company" in payload:
+        if not isinstance(payload["company"], str) or not payload["company"].strip():
+            raise HTTPException(
+                status_code=400, detail={"message": "invalid_company"}
+            )
+        i.company = payload["company"].strip()
+
+    if "role" in payload:
+        if not isinstance(payload["role"], str) or not payload["role"].strip():
+            raise HTTPException(
+                status_code=400, detail={"message": "invalid_role"}
+            )
+        # DB에는 role 컬럼으로 저장
+        i.role = payload["role"].strip()
+
+    if "interview_date" in payload and payload["interview_date"] is not None:
+        try:
+            i.interview_date = datetime.strptime(
+                payload["interview_date"], "%Y-%m-%d"
+            ).date()
+        except Exception:
+            raise HTTPException(
+                status_code=400, detail={"message": "invalid_interview_date"}
+            )
+    elif "interview_date" in payload and payload["interview_date"] is None:
+        i.interview_date = None
+
+    db.add(i)
+    db.commit()
+    db.refresh(i)
+
+    completed_sessions, total_sessions = _get_session_stats(db, i.id)
+
+    return {
+        "message": "interview_updated_successfully",
+        "interview": {
+            "id": i.id,
+            "company": i.company,
+            "role": i.role,
+            "interview_date": (
+                i.interview_date.isoformat() if i.interview_date else None
+            ),
+            "progress": _calc_progress(completed_sessions, total_sessions),
+            "completed_sessions": completed_sessions,
+            "total_sessions": total_sessions,
+        },
+    }
+    
+# C) 마이페이지: 면접 삭제
+@router.delete("/{id}", tags=["mypage"])
+def delete_interview(
+    id: int,
+    current = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    token_uid = current["id"]
+
+    # i: Optional[Interview] = db.query(Interview).get(id)
+    i = db.get(Interview, id)
+    if not i:
+        raise HTTPException(status_code=404, detail={"message": "interview_not_found"})
+    if str(i.user_id) != token_uid:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "forbidden",
+                "detail": "User not authorized to delete this interview",
+            },
+        )
+
+    db.delete(i)
+    db.commit()
+    return {"message": "interview_deleted_successfully"}
+'''

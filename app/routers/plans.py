@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Query
 router = APIRouter()
 
+# 사용하지 않는 api 엔드포인트
+'''
 @router.get("/{content_id}/question-plan/preview")
 def question_plan_preview(content_id: int,
                         mode: str = Query(..., pattern="^(tech|soft|both)$"),  # ✅ regex → pattern
@@ -18,3 +20,4 @@ def question_plan_preview(content_id: int,
                 "tip_ids": ["tip_example", "tip_star", "tip_followup"],
         },
     }
+'''
