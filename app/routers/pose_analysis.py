@@ -3,6 +3,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from tempfile import NamedTemporaryFile
 
 from app.deps import get_db, get_current_user
 from app.models.sessions import InterviewSession
@@ -10,6 +11,7 @@ from app.models.media_asset import MediaAsset
 from app.models.feedback_summary import FeedbackSummary
 from app.services.pose_model import run_pose_on_video
 from app.services.feedback_service import create_or_update_pose_feedback
+from app.services.storage_service import supabase, VIDEO_BUCKET
 import os
 
 router = APIRouter()
@@ -32,7 +34,7 @@ def start_pose_analysis(
     )
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
-    if session.user_id != user["id"]:
+    if str(session.user_id) != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 2) media 조회 (video kind=1)
@@ -50,12 +52,21 @@ def start_pose_analysis(
     if not media:
         raise HTTPException(status_code=404, detail="media_not_found")
 
-    video_path = media.storage_url
-    if not os.path.exists(video_path):
+    storage_path = media.storage_url  # "sessions/11/q1.webm"
+
+    # Supabase Storage에서 파일 다운로드
+    try:
+        file_bytes: bytes = supabase.storage.from_(VIDEO_BUCKET).download(storage_path)
+    except Exception as e:
         raise HTTPException(
             status_code=404,
-            detail="video_file_not_found_on_server",
+            detail=f"Failed to download video from storage: {str(e)}",
         )
+
+    # 임시 파일로 저장
+    with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
 
     # Background task: 분석 수행 및 DB 저장
     def _worker(video_path_local: str, s_id: int, a_id: int):
@@ -65,8 +76,14 @@ def start_pose_analysis(
             create_or_update_pose_feedback(db, s_id, a_id, pose_json)
         except Exception as e:
             print("pose analysis error:", e)
+        finally:
+            # 임시 파일 삭제
+            try:
+                os.remove(video_path_local)
+            except OSError:
+                pass
 
-    background_tasks.add_task(_worker, video_path, session_id, attempt_id)
+    background_tasks.add_task(_worker, tmp_path, session_id, attempt_id)
 
     return {
         "message": "pose_analysis_started",
@@ -81,6 +98,7 @@ def start_pose_analysis(
 def get_pose_feedback(
     session_id: int,
     attempt_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -92,7 +110,7 @@ def get_pose_feedback(
     )
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
-    if session.user_id != user["id"]:
+    if str(session.user_id) != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 결과 조회 (session_id + attempt_id 기준)
@@ -104,9 +122,68 @@ def get_pose_feedback(
         )
         .first()
     )
-    if not fs:
-        raise HTTPException(status_code=409, detail="pose_analysis_not_ready")
 
+    # 결과가 없으면 자동으로 분석 시작
+    if not fs:
+        # media 조회 (video kind=1)
+        media = (
+            db.query(MediaAsset)
+            .filter(
+                MediaAsset.session_id == session_id,
+                MediaAsset.attempt_id == attempt_id,
+                MediaAsset.kind == 1,
+            )
+            .order_by(MediaAsset.created_at.desc())
+            .first()
+        )
+
+        if not media:
+            raise HTTPException(status_code=404, detail="media_not_found")
+
+        storage_path = media.storage_url  # "sessions/11/q1.webm"
+
+        # Supabase Storage에서 파일 다운로드
+        try:
+            file_bytes: bytes = supabase.storage.from_(VIDEO_BUCKET).download(storage_path)
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to download video from storage: {str(e)}",
+            )
+
+        # 임시 파일로 저장
+        with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        # Background task: 분석 수행 및 DB 저장
+        def _worker(video_path_local: str, s_id: int, a_id: int):
+            try:
+                pose_json = run_pose_on_video(video_path_local)
+                create_or_update_pose_feedback(db, s_id, a_id, pose_json)
+            except Exception as e:
+                print("pose analysis error:", e)
+            finally:
+                # 임시 파일 삭제
+                try:
+                    os.remove(video_path_local)
+                except OSError:
+                    pass
+
+        background_tasks.add_task(_worker, tmp_path, session_id, attempt_id)
+
+        # 분석 시작됨 응답 (202 Accepted)
+        raise HTTPException(
+            status_code=202,
+            detail={
+                "message": "pose_analysis_started",
+                "status": "pending",
+                "session_id": session_id,
+                "attempt_id": attempt_id,
+            }
+        )
+
+    # 결과 있음 → 반환
     return {
         "message": "pose_analysis_success",
         "session_id": session_id,

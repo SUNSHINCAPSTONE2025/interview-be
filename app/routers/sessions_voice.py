@@ -1,6 +1,8 @@
 # app/routers/sessions_voice.py
 
 from typing import Any, Dict
+from tempfile import NamedTemporaryFile
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session as OrmSession
@@ -15,6 +17,7 @@ from app.services.feedback_service import (
 )
 from app.services import vocal_analysis, vocal_feedback
 from app.services.voice_analysis_service import analyze_voice_from_storage_url
+from app.services.storage_service import supabase, VIDEO_BUCKET
 
 
 router = APIRouter(
@@ -137,10 +140,38 @@ def get_voice_feedback_endpoint(
         )
         .first()
     )
+
+    # 결과가 없으면 자동으로 분석 수행
     if not fs:
-        raise HTTPException(
-            status_code=404,
-            detail="Voice feedback not found for this session",
-        )
+        storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+
+        # Supabase Storage에서 파일 다운로드
+        try:
+            file_bytes: bytes = supabase.storage.from_(VIDEO_BUCKET).download(storage_url)
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to download audio from storage: {str(e)}",
+            )
+
+        # 임시 파일로 저장
+        with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        try:
+            # 임시 파일 경로로 분석 수행
+            voice_payload = analyze_voice_from_storage_url(tmp_path)
+
+            # feedback_summary 테이블에 저장
+            create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
+
+            return voice_payload
+        finally:
+            # 임시 파일 삭제
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     return build_voice_payload_from_summary(fs)

@@ -64,8 +64,8 @@ def build_prompt_generate_questions(sentences: List[str]) -> str:
 
 <goal>
 아래 자기소개서 문장 리스트를 읽고,
-1) 면접가치가 높은 '핵심 문장'을 고른 뒤
-2) 각 핵심 문장에 대해 1~3개의 면접 질문을 생성하고
+1) 면접가치가 높은 '핵심 문장'을 1~3개 선정한 뒤
+2) 총 20개 이상의 면접 질문을 생성합니다 (핵심 문장당 균등 분배)
 3) 각 질문에 타입(type: job|soft)과 신뢰도(confidence: 0~1)를 부여합니다.
 </goal>
 
@@ -95,6 +95,24 @@ def build_prompt_generate_questions(sentences: List[str]) -> str:
 주의: mixed 타입은 사용하지 마세요. job 또는 soft 중 더 강한 쪽을 선택하세요.
 </question_type_guide>
 
+<quality_handling>
+자소서 퀄리티가 낮거나 구체성이 부족한 경우:
+- 제한된 정보에서도 추론 가능한 질문을 생성하세요
+- 예: "X 프로젝트를 진행했습니다" → "X 프로젝트에서 가장 어려웠던 기술적 챌린지는 무엇이었고, 어떻게 해결했나요?"
+- 추상적 표현이라도 행동기반 질문으로 변환하세요
+- 최소 15개, 최대 25개의 질문을 생성하세요
+
+자소서가 구체적이고 정량적 성과가 있는 경우:
+- 숫자, 기술명, 프로젝트명을 적극 활용하세요
+- Why(선택 근거), How(구현 방법), What-if(대안 비교)를 중심으로 질문하세요
+</quality_handling>
+
+<distribution_guide>
+- 핵심 문장이 1개: 20개 질문 모두 해당 문장 기반
+- 핵심 문장이 2개: 각 10개씩 분배
+- 핵심 문장이 3개: 각 6-7개씩 분배
+- job:soft 비율은 7:3 ~ 6:4를 권장합니다
+</distribution_guide>
 
 <bad_question_examples>
 1. "프로젝트에서 어떤 기술 스택을 사용했나요?" (피할 것)
