@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query, 
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import tempfile
 import os
 
@@ -46,7 +46,13 @@ def deprecated_route():
     return {"message":"use /api/sessions/{content_id}/start"}
 
 @router.post("/{content_id}/start")
-def session_start(content_id: int, payload: StartIn):
+def session_start(
+    content_id: int,
+    payload: StartIn,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    # 기존 유효성 검사 그대로 유지
     if not payload.use_saved_context and not (
         payload.override_context and payload.override_context.questions
     ):
@@ -54,13 +60,32 @@ def session_start(content_id: int, payload: StartIn):
             status_code=400,
             detail="Provide override_context.questions or enable use_saved_context",
         )
-    # TODO: 생성 작업 큐잉
+
+    # current_user dict 구조에 맞게 user_id 꺼내기
+    # (auth/me 에서 profile을 붙여주고 있다면 이런 식)
+    profile = current_user["profile"]
+    user_id = profile.id          # 또는 current_user["id"] 가 user_profiles.id 와 같다면 그걸 써도 됨
+
+    # ⚠️ InterviewSession 에 실제로 있는 필드만 사용
+    session = InterviewSession(
+        user_id=user_id,
+        content_id=content_id,
+        status="running",                       # draft | running | done | canceled 중 하나 선택
+        started_at=datetime.now(timezone.utc),  # NOT NULL 컬럼
+        session_max=payload.count or 5,         # count가 질문 개수라면 임시로 이렇게 사용
+    )
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
     return {
         "message": "generation_started",
-        "session_id": "sess_9a12",
-        "generation_id": "gen_73bc",
-        "status": "pending",
+        "session_id": session.id,      # 이제 int PK
+        "generation_id": "gen_73bc",   # TODO: 실제 생성 작업 id로 교체
+        "status": session.status,
     }
+
 
 @router.post("/{session_id}/recordings/{question_index}")
 async def upload_recording(

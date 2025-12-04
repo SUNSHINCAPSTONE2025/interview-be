@@ -1,41 +1,29 @@
 # app/services/voice_analysis_service.py
 
 from typing import Dict, Any
-import os
-import tempfile
-
+import io
+import soundfile as sf
+from supabase import create_client
 import requests
 from app.services import vocal_analysis, vocal_feedback
+from app.config import settings
+import parselmouth
 
+supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+BUCKET_NAME = "interview_media_asset_video"
 
-def _load_sound_from_storage_url(storage_url: str):
-    """
-    storage_url이
-      - http/https로 시작하면: 원격에서 다운로드 → 임시 파일에 저장 → load_sound
-      - 그 외: 로컬 파일 경로라고 가정하고 바로 load_sound
-    """
-    if storage_url.startswith("http://") or storage_url.startswith("https://"):
-        resp = requests.get(storage_url)
-        resp.raise_for_status()
-
-        # Supabase에서 wav/mp3 등 확장자를 그대로 주는 경우가 많으니, 그대로 따옴
-        _, ext = os.path.splitext(storage_url)
-        if not ext:
-            ext = ".wav"
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-        tmp.write(resp.content)
-        tmp.flush()
-        tmp.close()
-
-        local_path = tmp.name
+def _load_sound_from_storage_url(storage_path: str) -> parselmouth.Sound:
+    prefix = f"{BUCKET_NAME}/"
+    if storage_path.startswith(prefix):
+        relative_path = storage_path[len(prefix):]
     else:
-        # 로컬 경로라고 가정 (예: /mnt/audio/..., D:/audio/...)
-        local_path = storage_url
+        relative_path = storage_path.lstrip("/")
 
-    # vocal_analysis.load_sound(path: str) → Praat Sound 객체
-    sound = vocal_analysis.load_sound(local_path)
-    return sound
+    data: bytes = supabase.storage.from_(BUCKET_NAME).download(relative_path)
+
+    f = io.BytesIO(data)
+    y, sr = sf.read(f, dtype="float32", always_2d=True)
+    return parselmouth.Sound(y.T, sr)
 
 
 def _analyze_voice_core(sound) -> Dict[str, Any]:

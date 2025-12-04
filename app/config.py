@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     supabase_issuer: str | None = None       # SUPABASE_ISSUER
     supabase_jwt_audience: str = "authenticated"  # SUPABASE_JWT_AUDIENCE
     supabase_jwt_secret: str | None = None
+    supabase_service_role_key: str | None = None
 
     # 🔥 pydantic-settings v2 스타일
     model_config = SettingsConfigDict(
