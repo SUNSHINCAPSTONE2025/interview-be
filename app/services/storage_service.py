@@ -19,10 +19,11 @@ def upload_file_to_supabase(file_path: str, bucket_name: str, dest_path: str) ->
     - 반환값: bucket 내의 파일 경로
     """
     with open(file_path, "rb") as f:
-        supabase.storage.from_(bucket_name).upload(dest_path, f, {
-            "content-type": "application/octet-stream",
-            "upsert": True
-        })
+        supabase.storage.from_(bucket_name).upload(
+            dest_path,
+            f,
+            file_options={"content-type": "application/octet-stream"}
+        )
     return dest_path  # 공개 URL이 아니라 경로만 반환
 
 def upload_video(file_path: str, dest_name: str) -> str:
