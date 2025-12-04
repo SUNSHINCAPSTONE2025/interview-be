@@ -108,8 +108,12 @@ def _require_user_id(authorization: Optional[str]) -> str:
 # 메인 페이지
 # 1) 메인: 면접 목록 조회
 @router.get("/contents", response_model=List[dict], tags=["interviews"])
-def list_contents(db: Session = Depends(get_db)):
-    items = db.query(Interview).order_by(Interview.id.desc()).all()
+def list_contents(
+    db: Session = Depends(get_db),
+    current = Depends(get_current_user),
+):
+    user_id = current["id"]
+    items = db.query(Interview).filter(Interview.user_id == user_id).order_by(Interview.id.desc()).all()
 
     results = []
     for i in items:
