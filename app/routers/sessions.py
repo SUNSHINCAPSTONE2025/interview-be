@@ -98,7 +98,20 @@ async def upload_recording(
             detail="invalid_question_index_for_session",
         )
 
-    # 2. 임시 파일 저장
+    # 2. Attempt 레코드 먼저 생성 (파일명에 attempt.id 사용하기 위해)
+    # TODO: FE에서 실제 started_at, ended_at, duration_sec 받아오기
+    attempt = Attempt(
+        session_id=session_id,
+        session_question_id=question_index,  # TODO: 실제 session_question_id 매핑
+        started_at=datetime.utcnow(),
+        ended_at=datetime.utcnow(),
+        duration_sec=0,  # TODO: 실제 duration 계산
+        status="ok"
+    )
+    db.add(attempt)
+    db.flush()  # attempt.id 생성
+
+    # 3. 임시 파일 저장
     tmp_path = None
     try:
         # 파일 내용 읽기
@@ -109,32 +122,29 @@ async def upload_recording(
             tmp.write(content)
             tmp_path = tmp.name
 
-        # 3. Supabase Storage에 업로드
-        dest_path = f"sessions/{session_id}/q{question_index}.webm"
+        # 4. Supabase Storage에 업로드 (attempt.id 포함)
+        dest_path = f"sessions/{session_id}/attempt_{attempt.id}.webm"
         storage_path = upload_video(tmp_path, dest_path)
 
-        # 4. Attempt 레코드 생성
-        # TODO: FE에서 실제 started_at, ended_at, duration_sec 받아오기
-        attempt = Attempt(
-            session_id=session_id,
-            session_question_id=question_index,  # TODO: 실제 session_question_id 매핑
-            started_at=datetime.utcnow(),
-            ended_at=datetime.utcnow(),
-            duration_sec=0,  # TODO: 실제 duration 계산
-            status="ok"
-        )
-        db.add(attempt)
-        db.flush()  # attempt.id 생성
-
         # 5. MediaAsset 레코드 생성 (video)
-        media = MediaAsset(
+        media_video = MediaAsset(
             session_id=session_id,
             attempt_id=attempt.id,
             session_question_id=question_index,
-            kind=1,  # video (kind: 1=video, 2=image, 3=audio)
+            kind=1,  # video
             storage_url=storage_path
         )
-        db.add(media)
+        db.add(media_video)
+
+        # 6. MediaAsset 레코드 생성 (audio) - WebM 파일 동일하게 사용
+        media_audio = MediaAsset(
+            session_id=session_id,
+            attempt_id=attempt.id,
+            session_question_id=question_index,
+            kind=3,  # audio
+            storage_url=storage_path  # 동일한 WebM 파일 사용
+        )
+        db.add(media_audio)
         db.commit()
 
         return {

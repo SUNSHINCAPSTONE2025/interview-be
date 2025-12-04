@@ -8,19 +8,11 @@ import cv2
 import mediapipe as mp
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from supabase import create_client, Client
 
 from app.config import settings
 from app.models.feedback_summary import FeedbackSummary
 from app.models.media_asset import MediaAsset
-
-
-BUCKET_NAME = "interview_media_asset"
-
-supabase: Client = create_client(
-    settings.supabase_url,
-    settings.supabase_anon_key
-)
+from app.services.storage_service import supabase, VIDEO_BUCKET as BUCKET_NAME
 
 
 
@@ -452,7 +444,7 @@ async def run_expression_analysis_for_session(
         .filter(
             MediaAsset.session_id == session_id,
             MediaAsset.attempt_id == attempt_id,
-            MediaAsset.kind == 0,
+            MediaAsset.kind == 1,  # 1=video
         )
         .first()
     )
