@@ -3,6 +3,7 @@ from app.models.feedback_summary import FeedbackSummary
 from sqlalchemy import func
 import numpy as np
 import pandas as pd
+from sqlalchemy.orm import Session
 
 # (1) 포즈 피드백 관련 함수
 
