@@ -198,3 +198,32 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> dict:
             },
         ],
     }
+
+def create_or_update_comment_feedback(
+    db: Session,
+    session_id: int,
+    attempt_id: int,
+    comment: str,
+) -> FeedbackSummary:
+    
+    fs = (
+        db.query(FeedbackSummary)
+        .filter(
+            FeedbackSummary.session_id == session_id,
+            FeedbackSummary.attempt_id == attempt_id,
+        )
+        .first()
+    )
+
+    if fs is None:
+        fs = FeedbackSummary(
+            session_id=session_id,
+            attempt_id=attempt_id,
+        )
+        db.add(fs)
+
+    fs.comment = comment
+
+    db.commit()
+    db.refresh(fs)
+    return fs
