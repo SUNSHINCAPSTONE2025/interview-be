@@ -80,7 +80,7 @@ async def upload_recording(
     if not session:
         raise HTTPException(status_code=404, detail="session_not_found")
 
-    if session.user_id != user["id"]:
+    if str(session.user_id) != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 1-1. question_index → 실제 SessionQuestion.id 로 매핑
@@ -177,7 +177,7 @@ def get_session(
         raise HTTPException(status_code=404, detail="session_not_found")
 
     # 권한 확인
-    if session.user_id != user["id"]:
+    if str(session.user_id) != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 세션 질문 조회
@@ -281,7 +281,7 @@ def update_session_status(
         raise HTTPException(status_code=404, detail="session_not_found")
 
     # 권한 확인
-    if session.user_id != user["id"]:
+    if str(session.user_id) != user["id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     # 상태 업데이트
