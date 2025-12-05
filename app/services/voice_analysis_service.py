@@ -1,37 +1,96 @@
 # app/services/voice_analysis_service.py
 
 from typing import Dict, Any
-import io
+import io, os, tempfile, subprocess
 import soundfile as sf
 from supabase import create_client
-import requests
+from urllib.parse import urlparse
 from app.services import vocal_analysis, vocal_feedback
 from app.config import settings
-import parselmouth
+import parselmouth, librosa
+import logging
+
+logger = logging.getLogger(__name__)
 
 supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
 BUCKET_NAME = "interview_media_asset_video"
 
-def _load_sound_from_storage_url(storage_path: str) -> parselmouth.Sound:
+def _normalize_supabase_path(raw: str) -> str:
+    raw = raw.strip()
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        parsed = urlparse(raw)
+        parts = parsed.path.split("/")
+        if BUCKET_NAME in parts:
+            idx = parts.index(BUCKET_NAME)
+            rel = "/".join(parts[idx + 1 :])
+            return rel.lstrip("/")
+        return parts[-1]  # 혹시 못 찾으면 파일명만
+
     prefix = f"{BUCKET_NAME}/"
-    if storage_path.startswith(prefix):
-        relative_path = storage_path[len(prefix):]
-    else:
-        relative_path = storage_path.lstrip("/")
+    if raw.startswith(prefix):
+        return raw[len(prefix) :].lstrip("/")
 
-    data: bytes = supabase.storage.from_(BUCKET_NAME).download(relative_path)
+    return raw.lstrip("/")
 
-    f = io.BytesIO(data)
-    y, sr = sf.read(f, dtype="float32", always_2d=True)
-    return parselmouth.Sound(y.T, sr)
+
+def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
+    logger.info("[VOICE] load from storage: %r", storage_path_or_url)
+
+    rel_path = _normalize_supabase_path(storage_path_or_url)
+    logger.debug("[VOICE] normalized path=%r", rel_path)
+
+    # Supabase에서 파일 bytes 다운로드
+    data: bytes = supabase.storage.from_(BUCKET_NAME).download(rel_path)
+    if not data:
+        raise RuntimeError(f"Downloaded empty file from storage. path={rel_path!r}")
+
+    ext = os.path.splitext(rel_path)[1].lower()  # '.webm', '.wav' 등
+
+    # 1) 이미 wav인 경우 → 바로 읽기
+    if ext == ".wav":
+        f = io.BytesIO(data)
+        y, sr = sf.read(f, dtype="float32", always_2d=True)
+        return parselmouth.Sound(y.T, sr)
+
+    # 2) webm 등인 경우 → ffmpeg로 wav로 변환해서 읽기
+    if ext in {".webm", ".mp4", ".m4a"}:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            in_path = os.path.join(tmpdir, "input" + ext)
+            out_path = os.path.join(tmpdir, "output.wav")
+
+            # webm bytes를 임시 파일로 저장
+            with open(in_path, "wb") as f:
+                f.write(data)
+
+            # ffmpeg로 wav 변환 (예: mono, 16kHz)
+            cmd = [
+                "ffmpeg",
+                "-y",              # 덮어쓰기 허용
+                "-i", in_path,     # 입력 파일
+                "-ac", "1",        # 채널 수 (mono)
+                "-ar", "16000",    # 샘플링 레이트
+                out_path,
+            ]
+            logger.debug("[VOICE] run ffmpeg: %s", " ".join(cmd))
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if proc.returncode != 0:
+                logger.error("ffmpeg failed: %s", proc.stderr.decode("utf-8", "ignore"))
+                raise RuntimeError("ffmpeg convert failed")
+
+            # 변환된 wav 읽기
+            y, sr = sf.read(out_path, dtype="float32", always_2d=True)
+            return parselmouth.Sound(y.T, sr)
+
+    # 3) 그 외 확장자
+    raise RuntimeError(f"Unsupported audio extension: {ext}")
 
 
 def _analyze_voice_core(sound) -> Dict[str, Any]:
-    """
-    실제 분석/스코어링 공통 로직.
-    입력만 Praat Sound로 통일해두고,
-    어디서든 불러다 쓸 수 있게 따로 뺌.
-    """
     tremor = vocal_analysis.eval_tremor(sound)
     sp_tl = vocal_analysis.eval_speed_pause_timeline(sound)
     inton = vocal_analysis.robust_eval_intonation(sound)
@@ -47,11 +106,5 @@ def _analyze_voice_core(sound) -> Dict[str, Any]:
 
 
 def analyze_voice_from_storage_url(storage_url: str) -> Dict[str, Any]:
-    """
-    MediaAsset.storage_url 을 받아서:
-    1) 실제 오디오 로딩 (Supabase URL or 로컬 경로)
-    2) vocal_analysis로 프로소디 지표 분석
-    3) vocal_feedback으로 프론트용 payload 생성
-    """
     sound = _load_sound_from_storage_url(storage_url)
     return _analyze_voice_core(sound)

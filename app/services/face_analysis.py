@@ -1,8 +1,9 @@
 from typing import List, Tuple, Dict, Optional
-import os
+import os, subprocess, tempfile
 import math
 from tempfile import NamedTemporaryFile
-
+from pathlib import Path
+from shutil import which
 import numpy as np
 import cv2
 import mediapipe as mp
@@ -209,6 +210,7 @@ def analyze_expression_video(
     frame_stride: int = 5,
 ) -> Dict:
     cap = cv2.VideoCapture(video_path)
+    print("[expression] open:", cap.isOpened(), "path:", video_path)
     if not cap.isOpened():
         raise FileNotFoundError("Session video not found")
 
@@ -368,6 +370,7 @@ def analyze_expression_video(
     frames_total = stats["frames"]
     cap.release()
 
+    print("[expression] fps:", fps, "total_frames:", frames_total)
     if frames_total == 0:
         raise HTTPException(status_code=409, detail="expression_analysis_not_ready")
 
@@ -429,6 +432,8 @@ def analyze_expression_video(
 
 
 # 세션 단위 분석 + DB 저장 + 응답 생성
+
+FFMPEG_BIN = which("ffmpeg") or "ffmpeg"
 async def run_expression_analysis_for_session(
     session_id: int,
     attempt_id: int,
@@ -436,15 +441,14 @@ async def run_expression_analysis_for_session(
     baseline_seconds: float,
     frame_stride: int,
     db: Session,
-) -> Dict:
-    
-    # media_asset에서 이 세션의 영상 찾기 (attempt 단위)
-    media: Optional[MediaAsset] = (
+):
+    # 1) 이 세션 + attempt 에 해당하는 비디오 media_asset 찾기
+    media = (
         db.query(MediaAsset)
         .filter(
             MediaAsset.session_id == session_id,
             MediaAsset.attempt_id == attempt_id,
-            MediaAsset.kind == 1,  # 1=video
+            MediaAsset.kind == 1,  # 1 = video
         )
         .first()
     )
@@ -452,9 +456,9 @@ async def run_expression_analysis_for_session(
     if media is None:
         raise HTTPException(status_code=404, detail="session_not_found")
 
-    storage_path = media.storage_url
+    storage_path = media.storage_url  # 예: "sessions/22/attempt_44.webm"
 
-    # Supabase Storage 에서 파일 다운로드
+    # 2) Supabase Storage 에서 파일 다운로드
     try:
         file_bytes: bytes = (
             supabase
@@ -465,28 +469,77 @@ async def run_expression_analysis_for_session(
     except Exception:
         raise HTTPException(status_code=404, detail="Session with this ID not found")
 
-    # 임시 파일에 저장 후 분석 실행
-    with NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
+    if not file_bytes:
+        raise HTTPException(status_code=500, detail="expression_empty_video_file")
 
+    # 원본 확장자 (.webm, .mp4 등)
+    ext = Path(storage_path).suffix.lower() or ".webm"
+
+    # 3) 원본(webm/...) 임시 파일 저장
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_in:
+        tmp_in.write(file_bytes)
+        in_path = tmp_in.name
+
+    video_path = in_path
+    out_path = None
+
+    # 4) webm 이면 ffmpeg 로 mp4 로 변환
+    if ext == ".webm":
+        fd, out_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+
+        cmd = [
+            FFMPEG_BIN,
+            "-y",
+            "-i", in_path,
+            "-vcodec", "libx264",
+            "-an",           # 오디오는 필요 없으니 제거
+            out_path,
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            # 디버깅할 때 stderr 보고 싶으면 여기에 print 한 줄 추가해도 됨
+            # print("FFMPEG ERR:", proc.stderr.decode("utf-8", "ignore"))
+            raise HTTPException(status_code=500, detail="expression_ffmpeg_failed")
+
+        video_path = out_path  # 이후 분석은 mp4 대상으로 진행
+
+    # 5) 표현 분석 실행
     try:
         res = analyze_expression_video(
-            video_path=tmp_path,
+            video_path=video_path,
             blink_limit_per_min=blink_limit_per_min,
             baseline_seconds=baseline_seconds,
             frame_stride=frame_stride,
         )
     finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        # 임시 파일 정리
+        for p in {in_path, out_path}:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
-    # feedback_summary 테이블 저장/업데이트 (attempt 단위)
-    from app.services.feedback_service import get_or_create_feedback_summary
+    # 6) feedback_summary 테이블 저장/업데이트
+    summary = (
+        db.query(FeedbackSummary)
+        .filter(
+            FeedbackSummary.session_id == session_id,
+            FeedbackSummary.attempt_id == attempt_id,
+        )
+        .first()
+    )
 
-    summary = get_or_create_feedback_summary(db, session_id, attempt_id)
+    if summary is None:
+        summary = FeedbackSummary(
+            session_id=session_id,
+            attempt_id=attempt_id,
+        )
 
     summary.overall_face = res["overall_score"]
     summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
@@ -497,8 +550,7 @@ async def run_expression_analysis_for_session(
     db.add(summary)
     db.commit()
 
-    # API 명세에 맞게 응답 구성
-    body = {
+    return {
         "message": "expression_analysis_success",
         "session_id": session_id,
         "attempt_id": attempt_id,
@@ -506,4 +558,3 @@ async def run_expression_analysis_for_session(
         "expression_analysis": res["expression_analysis"],
         "feedback_summary": res["feedback_summary"],
     }
-    return body
