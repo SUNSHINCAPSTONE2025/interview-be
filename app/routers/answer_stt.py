@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from app.deps import get_db, get_current_user
 from app.models.sessions import InterviewSession
+from app.models.attempts import Attempt  
 from app.services.stt_service import STTService
 
 router = APIRouter(
@@ -43,7 +44,7 @@ async def transcribe_answer_audio(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
 
-    # 세션 권한 체크
+    # 세션 권한 체크 
     _get_session_or_404(db, session_id, current_user["id"])
 
     # 파일 타입 체크
@@ -61,8 +62,29 @@ async def transcribe_answer_audio(
             detail="업로드된 오디오 파일이 비어 있습니다.",
         )
 
-    # STT 
+    # STT 수행
     transcript = STTService.transcribe(audio_bytes)
+
+    # 해당 session 내 attempt인지 확인하고 stt_text 저장
+    attempt_obj = (
+        db.query(Attempt)
+        .filter(
+            Attempt.id == attempt_id,
+            Attempt.session_id == session_id,
+        )
+        .first()
+    )
+    if not attempt_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attempt not found",
+        )
+
+    # transcript 저장
+    attempt_obj.stt_text = transcript
+    db.add(attempt_obj)
+    db.commit()
+    db.refresh(attempt_obj)
 
     return STTResponse(
         session_id=session_id,
