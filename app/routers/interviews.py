@@ -235,7 +235,7 @@ def start_session(
             "question_id": bq.id,
             "order_no": order_no,
             "text": bq.text,
-            "type": bq.type,
+            "type": bq.label,
         })
 
     # GeneratedQuestion

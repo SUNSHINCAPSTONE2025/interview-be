@@ -7,6 +7,5 @@ class BasicQuestion(Base):
 
     id = Column(BigInteger, primary_key=True, index=True)
     label = Column(String(20), nullable=False) # job|soft
-    type = Column(String(50), nullable=True)  # ex) 2021년 하반기
     text = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
