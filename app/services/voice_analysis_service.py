@@ -37,6 +37,50 @@ def _normalize_supabase_path(raw: str) -> str:
 def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
     logger.info("[VOICE] load from storage: %r", storage_path_or_url)
 
+    # 0) 로컬 파일 경로(C:\..., \Users\..., /tmp/...)인 경우 → Supabase 거치지 않고 바로 읽기
+    if os.path.isabs(storage_path_or_url):
+        logger.debug("[VOICE] detected local path=%r", storage_path_or_url)
+        path = storage_path_or_url
+        ext = os.path.splitext(path)[1].lower()  # '.webm', '.wav' 등
+
+        # wav → 바로 읽기
+        if ext == ".wav":
+            y, sr = sf.read(path, dtype="float32", always_2d=True)
+            return parselmouth.Sound(y.T, sr)
+
+        # webm/mp4/m4a → ffmpeg로 wav 변환 후 읽기
+        if ext in {".webm", ".mp4", ".m4a"}:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out_path = os.path.join(tmpdir, "output.wav")
+
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i", path,
+                    "-ac", "1",
+                    "-ar", "16000",
+                    out_path,
+                ]
+                logger.debug("[VOICE] run ffmpeg(local): %s", " ".join(cmd))
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if proc.returncode != 0:
+                    logger.error(
+                        "ffmpeg failed (local): %s",
+                        proc.stderr.decode("utf-8", "ignore"),
+                    )
+                    raise RuntimeError("ffmpeg convert failed (local)")
+
+                y, sr = sf.read(out_path, dtype="float32", always_2d=True)
+                return parselmouth.Sound(y.T, sr)
+
+        # 그 외 확장자
+        raise RuntimeError(f"Unsupported audio extension (local): {ext}")
+
+    # 1) 로컬 경로가 아니면 → Supabase 경로/URL로 취급
     rel_path = _normalize_supabase_path(storage_path_or_url)
     logger.debug("[VOICE] normalized path=%r", rel_path)
 
@@ -47,13 +91,13 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
 
     ext = os.path.splitext(rel_path)[1].lower()  # '.webm', '.wav' 등
 
-    # 1) 이미 wav인 경우 → 바로 읽기
+    # 2) 이미 wav인 경우 → 바로 읽기
     if ext == ".wav":
         f = io.BytesIO(data)
         y, sr = sf.read(f, dtype="float32", always_2d=True)
         return parselmouth.Sound(y.T, sr)
 
-    # 2) webm 등인 경우 → ffmpeg로 wav로 변환해서 읽기
+    # 3) webm 등인 경우 → ffmpeg로 wav 변환해서 읽기
     if ext in {".webm", ".mp4", ".m4a"}:
         with tempfile.TemporaryDirectory() as tmpdir:
             in_path = os.path.join(tmpdir, "input" + ext)
@@ -86,9 +130,8 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
             y, sr = sf.read(out_path, dtype="float32", always_2d=True)
             return parselmouth.Sound(y.T, sr)
 
-    # 3) 그 외 확장자
+    # 4) 그 외 확장자
     raise RuntimeError(f"Unsupported audio extension: {ext}")
-
 
 def _analyze_voice_core(sound) -> Dict[str, Any]:
     tremor = vocal_analysis.eval_tremor(sound)
