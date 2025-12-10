@@ -134,20 +134,63 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
     raise RuntimeError(f"Unsupported audio extension: {ext}")
 
 def _analyze_voice_core(sound) -> Dict[str, Any]:
+    logger.info(
+        "[VOICE_ANALYSIS] 40%% prosody_analysis_start duration=%.2f n_samples=%d",
+        sound.duration,
+        sound.n_samples,
+    )
+
     tremor = vocal_analysis.eval_tremor(sound)
+    logger.debug("[VOICE_ANALYSIS] tremor_done")
+
     sp_tl = vocal_analysis.eval_speed_pause_timeline(sound)
+    logger.debug("[VOICE_ANALYSIS] speed_pause_timeline_done")
+
     inton = vocal_analysis.robust_eval_intonation(sound)
+    logger.debug("[VOICE_ANALYSIS] intonation_done")
+
     energy = vocal_analysis.eval_energy(sound)
+    logger.debug("[VOICE_ANALYSIS] energy_done")
+
     rhythm = vocal_analysis.eval_rhythm_timing(sound)
+    logger.debug("[VOICE_ANALYSIS] rhythm_done")
+
     tone = vocal_analysis.compute_tone_fixed(inton, energy, rhythm)
+    logger.debug("[VOICE_ANALYSIS] tone_done")
 
     grouped = vocal_analysis.detect_grouped_with_cfg(sound, tremor, sp_tl)
+    logger.debug("[VOICE_ANALYSIS] grouped_detection_done")
 
     payload = vocal_feedback.build_payload_from_structures(tremor, sp_tl, tone)
     payload["grouped"] = grouped
+
+    logger.info(
+        "[VOICE_ANALYSIS] 90%% payload_built keys=%s",
+        list(payload.keys()),
+    )
     return payload
 
 
 def analyze_voice_from_storage_url(storage_url: str) -> Dict[str, Any]:
+    logger.info(
+        "[VOICE_ANALYSIS] 0%% start storage_url=%r",
+        storage_url,
+    )
+
+    # 1) 파일 로드
     sound = _load_sound_from_storage_url(storage_url)
-    return _analyze_voice_core(sound)
+    logger.info(
+        "[VOICE_ANALYSIS] 30%% sound_loaded duration=%.2f n_samples=%d",
+        sound.duration,
+        sound.n_samples,
+    )
+
+    # 2) 핵심 분석
+    payload = _analyze_voice_core(sound)
+
+    # 3) 완료
+    logger.info(
+        "[VOICE_ANALYSIS] 100%% done total_score=%s",
+        payload.get("total_score"),
+    )
+    return payload

@@ -3,6 +3,7 @@
 from typing import Any, Dict
 from tempfile import NamedTemporaryFile
 import os
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session as OrmSession
@@ -19,7 +20,7 @@ from app.services import vocal_analysis, vocal_feedback
 from app.services.voice_analysis_service import analyze_voice_from_storage_url
 from app.services.storage_service import supabase, VIDEO_BUCKET
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/api/feedback",
     tags=["voice-feedback"],
@@ -29,6 +30,7 @@ router = APIRouter(
 # --- 공통: 세션/오디오 파일 가져오기 ---
 
 def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> InterviewSession:
+    logger.debug("[VOICE_FEEDBACK] checking session_id=%s user_id=%s", session_id, user_id)
     session_obj = (
         db.query(InterviewSession)
         .filter(
@@ -38,12 +40,27 @@ def _get_session_or_404(db: OrmSession, session_id: int, user_id: int) -> Interv
         .first()
     )
     if not session_obj:
+        logger.warning(
+            "[VOICE_FEEDBACK] session_not_found session_id=%s user_id=%s",
+            session_id,
+            user_id,
+        )
         raise HTTPException(status_code=404, detail="Session not found")
+    logger.debug(
+        "[VOICE_FEEDBACK] session_ok session_id=%s status=%s",
+        session_obj.id,
+        session_obj.status,
+    )
     return session_obj
 
 
 
 def _get_audio_storage_url(db: OrmSession, session_id: int, attempt_id: int) -> str:
+    logger.debug(
+        "[VOICE_FEEDBACK] query_media_asset session_id=%s attempt_id=%s",
+        session_id,
+        attempt_id,
+    )
     q = db.query(MediaAsset).filter(
         MediaAsset.session_id == session_id,
         MediaAsset.kind == 3,  # audio
@@ -52,32 +69,27 @@ def _get_audio_storage_url(db: OrmSession, session_id: int, attempt_id: int) -> 
 
     asset = q.order_by(MediaAsset.created_at.desc()).first()
     if not asset:
+        logger.warning(
+            "[VOICE_FEEDBACK] audio_asset_not_found session_id=%s attempt_id=%s",
+            session_id,
+            attempt_id,
+        )
         raise HTTPException(
             status_code=400,
             detail="No audio media asset found for this session/attempt",
         )
+    logger.info(
+        "[VOICE_FEEDBACK] audio_asset_found session_id=%s attempt_id=%s storage_url=%s",
+        session_id,
+        attempt_id,
+        asset.storage_url,
+    )
     return asset.storage_url
 
 
 # --- 목소리 분석 helper ---
 
 def _analyze_voice(audio_path: str) -> Dict[str, Any]:
-    """
-    vocal_analysis + vocal_feedback를 한 번에 돌려서
-    프론트에서 바로 사용할 payload를 만들어줌.
-    payload 구조 예:
-      {
-        "total_score": 82,
-        "summary": "...",
-        "metrics": [
-          {"id": "tremor", "score": ..., ...},
-          {"id": "pause",  "score": ..., ...},
-          {"id": "tone",   "score": ..., ...},
-          {"id": "speed",  "score": ..., ...},
-        ],
-        "grouped": {...}  # 선택
-      }
-    """
     # 1) 음성 로드
     sound = vocal_analysis.load_sound(audio_path)
 
@@ -108,15 +120,35 @@ def create_or_update_voice_feedback_endpoint(
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    logger.info(
+        "[VOICE_FEEDBACK][POST] START session_id=%s attempt_id=%s user_id=%s",
+        session_id,
+        attempt_id,
+        current_user["id"],
+    )
+
     _get_session_or_404(db, session_id, current_user["id"])
 
     storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+    logger.info(
+        "[VOICE_FEEDBACK][POST] 20%% audio_path_resolved storage_url=%s",
+        storage_url,
+    )
 
     # storage_url → 실제 wav/mp3 로드 → 분석 → payload 생성
     voice_payload = analyze_voice_from_storage_url(storage_url)
+    logger.info(
+        "[VOICE_FEEDBACK][POST] 70%% analysis_done total_score=%s",
+        voice_payload.get("total_score"),
+    )
 
     # feedback_summary 테이블에 overall_voice, tremor, blank, tone, speed, comment 저장
     create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
+    logger.info(
+        "[VOICE_FEEDBACK][POST] 100%% feedback_saved session_id=%s attempt_id=%s",
+        session_id,
+        attempt_id,
+    )
 
     return voice_payload
 
@@ -130,6 +162,13 @@ def get_voice_feedback_endpoint(
     db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    logger.info(
+        "[VOICE_FEEDBACK] START content_id=%s attempt_id=%s user_id=%s",
+        session_id,
+        attempt_id,
+        current_user["id"],
+    )
+
     _get_session_or_404(db, session_id, current_user["id"])
 
     fs = (
@@ -141,37 +180,85 @@ def get_voice_feedback_endpoint(
         .first()
     )
 
-    # 결과가 없으면 자동으로 분석 수행
-    if not fs:
-        storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+    # 1) 요약이 이미 있으면 그대로 반환
+    if fs:
+        logger.info(
+            "[VOICE_FEEDBACK][GET] summary_found session_id=%s attempt_id=%s overall_voice=%s",
+            session_id,
+            attempt_id,
+            fs.overall_voice,
+        )
+        return build_voice_payload_from_summary(fs)
 
-        # Supabase Storage에서 파일 다운로드
+    # 2) 없으면 자동 분석
+    logger.info(
+        "[VOICE_FEEDBACK][GET] summary_not_found → auto_analyze session_id=%s attempt_id=%s",
+        session_id,
+        attempt_id,
+    )
+
+    storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+
+    # Supabase Storage에서 파일 다운로드
+    try:
+        logger.info(
+            "[VOICE_FEEDBACK][GET] 10%% download_from_supabase bucket=%s key=%s",
+            VIDEO_BUCKET,
+            storage_url,
+        )
+        file_bytes: bytes = supabase.storage.from_(VIDEO_BUCKET).download(storage_url)
+        logger.debug(
+            "[VOICE_FEEDBACK][GET] download_ok bytes=%d",
+            len(file_bytes) if file_bytes else 0,
+        )
+    except Exception as e:
+        logger.exception(
+            "[VOICE_FEEDBACK][GET] download_failed session_id=%s attempt_id=%s",
+            session_id,
+            attempt_id,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Failed to download audio from storage: {str(e)}",
+        )
+
+    # 임시 파일로 저장
+    with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    logger.info(
+        "[VOICE_FEEDBACK][GET] 30%% temp_file_created path=%s",
+        tmp_path,
+    )
+
+    try:
+        # 임시 파일 경로로 분석 수행
+        voice_payload = analyze_voice_from_storage_url(tmp_path)
+        logger.info(
+            "[VOICE_FEEDBACK][GET] 80%% analysis_done total_score=%s",
+            voice_payload.get("total_score"),
+        )
+
+        # feedback_summary 테이블에 저장
+        create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
+        logger.info(
+            "[VOICE_FEEDBACK][GET] 100%% feedback_saved session_id=%s attempt_id=%s",
+            session_id,
+            attempt_id,
+        )
+
+        return voice_payload
+    finally:
+        # 임시 파일 삭제
         try:
-            file_bytes: bytes = supabase.storage.from_(VIDEO_BUCKET).download(storage_url)
-        except Exception as e:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Failed to download audio from storage: {str(e)}",
+            os.remove(tmp_path)
+            logger.debug(
+                "[VOICE_FEEDBACK][GET] temp_file_removed path=%s",
+                tmp_path,
             )
-
-        # 임시 파일로 저장
-        with NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-
-        try:
-            # 임시 파일 경로로 분석 수행
-            voice_payload = analyze_voice_from_storage_url(tmp_path)
-
-            # feedback_summary 테이블에 저장
-            create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
-
-            return voice_payload
-        finally:
-            # 임시 파일 삭제
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-    return build_voice_payload_from_summary(fs)
+        except OSError:
+            logger.warning(
+                "[VOICE_FEEDBACK][GET] temp_file_remove_failed path=%s",
+                tmp_path,
+            )
