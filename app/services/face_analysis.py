@@ -5,7 +5,7 @@ from tempfile import NamedTemporaryFile
 from pathlib import Path
 from shutil import which
 import numpy as np
-import cv2
+import cv2, logging
 import mediapipe as mp
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -15,7 +15,16 @@ from app.models.feedback_summary import FeedbackSummary
 from app.models.media_asset import MediaAsset
 from app.services.storage_service import supabase, VIDEO_BUCKET as BUCKET_NAME
 
-
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(levelname)s:%(name)s:%(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
 
 GAZE_OFF_ABS = 0.12
 EYE_OFF_ABS = 0.35
@@ -202,21 +211,34 @@ def build_feedback_summary(gaze_grade: str, blink_grade: str, mouth_grade: str) 
     return " / ".join(parts) + "."
 
 
-# 영상 분석
 def analyze_expression_video(
     video_path: str,
     blink_limit_per_min: int = 30,
     baseline_seconds: float = 2.0,
     frame_stride: int = 5,
 ) -> Dict:
+    logger.info(
+        "[EXPR] START video_path=%s blink_limit_per_min=%s baseline_seconds=%.2f frame_stride=%s",
+        video_path,
+        blink_limit_per_min,
+        baseline_seconds,
+        frame_stride,
+    )
+
     cap = cv2.VideoCapture(video_path)
-    print("[expression] open:", cap.isOpened(), "path:", video_path)
-    if not cap.isOpened():
+    opened = cap.isOpened()
+    logger.info("[EXPR] VideoCapture opened=%s path=%s", opened, video_path)
+
+    if not opened:
+        logger.error("[EXPR] Failed to open video: %s", video_path)
         raise FileNotFoundError("Session video not found")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     if fps <= 0 or np.isnan(fps):
+        logger.warning("[EXPR] Invalid FPS detected: %s → fallback to 30.0", fps)
         fps = 30.0
+
+    logger.info("[EXPR] FPS=%s", fps)
 
     vbuf: List[Tuple[float, float, float, float, float, float]] = []
     baseline: Optional[Dict[str, float]] = None
@@ -240,11 +262,21 @@ def analyze_expression_video(
     gaze_both_y: List[float] = []
 
     idx = -1
+    logged_progress_step = 100  # 몇 프레임마다 진행 로그 한 번씩 찍을지
+    raw_frames_total = 0
+    frames_with_face = 0
+    logged_progress_step = 100  # 몇 프레임마다 로그 찍을지
+
     while True:
         ok, frame0 = cap.read()
         if not ok:
+            logger.debug("[EXPR] cap.read() returned False → loop break")
             break
+
+        raw_frames_total += 1
+
         idx += 1
+        # stride 적용
         if frame_stride > 1 and (idx % frame_stride) != 0:
             continue
         t = idx / fps
@@ -259,6 +291,12 @@ def analyze_expression_video(
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = FACE_MESH.process(rgb)
         if not res.multi_face_landmarks:
+            if raw_frames_total % logged_progress_step == 0:
+                logger.debug(
+                    "[EXPR] no_face_detected_at_frame raw_idx=%s t=%.2fs",
+                    raw_frames_total,
+                    t,
+                )
             continue
         lms = res.multi_face_landmarks[0].landmark
         h, w = frame.shape[:2]
@@ -276,6 +314,17 @@ def analyze_expression_video(
         eye_v = np.mean([x[1] for x in [l_off, r_off] if x is not None]) if (l_off or r_off) else None
 
         stats["frames"] += 1
+        frames_with_face += 1
+
+        # progress 로그 (너무 많이 안 찍히게 프레임 간격 조절)
+        if stats["frames"] % logged_progress_step == 0:
+            logger.info(
+                "[EXPR] progress frames=%s t=%.2fs baseline_set=%s blinks=%s",
+                stats["frames"],
+                t,
+                baseline is not None,
+                stats["blinks_count"],
+            )
 
         # baseline 수집
         if baseline is None and t <= baseline_seconds:
@@ -304,6 +353,7 @@ def analyze_expression_video(
                     "eye_h": float(eye_h_b),
                     "eye_v": float(eye_v_b),
                 }
+                logger.info("[EXPR] baseline computed from buffer (median of %d frames)", len(vbuf))
             else:
                 baseline = {
                     "yaw": yaw,
@@ -313,6 +363,7 @@ def analyze_expression_video(
                     "eye_h": eye_h or 0.0,
                     "eye_v": eye_v or 0.0,
                 }
+                logger.info("[EXPR] baseline initialized from current frame")
             baseline_from_video = True
 
         if baseline is None:
@@ -325,6 +376,7 @@ def analyze_expression_video(
                 "eye_v": eye_v or 0.0,
             }
             baseline_from_video = True
+            logger.info("[EXPR] baseline forced initialization (early frame)")
 
         # 판정(머리)
         dyaw = (ema["yaw"] - baseline["yaw"]) if ema["yaw"] is not None else 0.0
@@ -370,9 +422,53 @@ def analyze_expression_video(
     frames_total = stats["frames"]
     cap.release()
 
-    print("[expression] fps:", fps, "total_frames:", frames_total)
+    logger.info(
+        "[EXPR] LOOP_END raw_frames_total=%s frames_with_face=%s "
+        "frames_head_ok=%s frames_eye_valid=%s frames_eye_ok=%s "
+        "frames_head_eye_ok=%s blinks=%s",
+        raw_frames_total,
+        frames_with_face,
+        stats["frames_head_ok"],
+        stats["frames_eye_valid"],
+        stats["frames_eye_ok"],
+        stats["frames_head_eye_ok"],
+        stats["blinks_count"],
+    )
+
     if frames_total == 0:
-        raise HTTPException(status_code=409, detail="expression_analysis_not_ready")
+        if raw_frames_total == 0:
+            reason = "no_video_frames"
+            detail = "녹화된 영상 프레임이 없습니다. 다시 촬영해 주세요."
+            logger.error(
+                "[EXPR] NO_VIDEO_FRAMES raw_frames_total=0 → 영상이 비어 있음 or 읽기 실패"
+            )
+        else:
+            reason = "no_face_detected"
+            detail = "영상에서 얼굴을 인식하지 못해 표정 분석을 진행할 수 없습니다."
+            logger.error(
+                "[EXPR] NO_FACE_DETECTED raw_frames_total=%s frames_with_face=%s → 한 번도 얼굴을 못 찾음",
+                raw_frames_total,
+                frames_with_face,
+            )
+        return {
+            "expression_analysis": None,
+            "aux": {
+                "head_gaze_rate_percent": 0.0,
+                "eye_only_gaze_rate_percent": 0.0,
+                "blinks_count": int(stats["blinks_count"]),
+                "blinks_per_min": None,
+                "baseline_source": None,
+                "frames_used": 0,
+                # 디버깅/프론트용 추가 정보
+                "raw_frames_total": int(raw_frames_total),
+                "frames_with_face": int(frames_with_face),
+                "reason": reason,
+            },
+            "overall_score": None,
+            "feedback_summary": detail,
+            "status": "analysis_unavailable",
+            "error_code": reason,
+        }
 
     # 영상 길이(초)
     duration_sec = frames_total / (fps / max(1, frame_stride))
@@ -407,6 +503,15 @@ def analyze_expression_video(
 
     feedback_summary = build_feedback_summary(gaze_grade, blink_grade, mouth_grade)
 
+    logger.info(
+        "[EXPR] DONE duration=%.2fs head_eye_gaze_rate=%.1f%% blinks_per_min=%.2f overall_score=%.1f baseline_from_video=%s",
+        dur,
+        head_eye_gaze_rate,
+        blinks_per_min,
+        overall_score,
+        baseline_from_video,
+    )
+
     result = {
         "expression_analysis": {
             "head_eye_gaze_rate": {"value": round(gaze_rate_norm, 2), "rating": gaze_grade},
@@ -429,6 +534,7 @@ def analyze_expression_video(
         "feedback_summary": feedback_summary,
     }
     return result
+
 
 
 # 세션 단위 분석 + DB 저장 + 응답 생성
@@ -524,6 +630,23 @@ async def run_expression_analysis_for_session(
                     os.remove(p)
                 except OSError:
                     pass
+
+        # 🔹 5-1) 분석 불가(status=analysis_unavailable)인 경우: DB에 점수 안 쓰고 그대로 리턴
+        if res.get("status") == "analysis_unavailable" or res.get("expression_analysis") is None:
+            logger.info(
+                "[EXPR] analysis_unavailable session_id=%s attempt_id=%s reason=%s",
+                session_id,
+                attempt_id,
+                res.get("error_code"),
+            )
+            # DB에 summary 레코드 하나 정도는 남기고 싶다면 여기서 comment만 저장해도 됨 (선택)
+            # 지금은 일단 DB 건드리지 않고 바로 응답만 내려줌
+            return {
+                "message": "expression_analysis_unavailable",
+                "session_id": session_id,
+                "attempt_id": attempt_id,
+                **res,
+            }
 
     # 6) feedback_summary 테이블 저장/업데이트
     summary = (
