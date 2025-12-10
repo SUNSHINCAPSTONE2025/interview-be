@@ -26,7 +26,7 @@ class OverrideContext(BaseModel):
     selected_mode: Optional[str] = None
 
 class StartIn(BaseModel):
-    mode: str
+    practice_type: str
     count: int = 5
     language: str = "ko"
     use_saved_context: bool = True
@@ -234,7 +234,7 @@ def get_session(
             bq = db.get(BasicQuestion, sq.question_id)
             if bq:
                 text = bq.text
-                question_type_value = bq.type
+                question_type_value = bq.label
         elif sq.question_type == "GENERATED":
             gq = db.get(GeneratedQuestion, sq.question_id)
             if gq:
