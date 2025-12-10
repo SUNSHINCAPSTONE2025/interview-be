@@ -132,143 +132,143 @@ def list_contents(
         )
     return results
 
-# 3) 메인: 연습 시작
-@router.post("/{id}/sessions/start")
-def start_session(
-    id: int,
-    payload: dict = Body(...),
-    db: Session = Depends(get_db),
-):
-    practice_type = payload.get("practice_type")
-    if practice_type not in ["job", "soft"]:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "invalid_request_body",
-                "detail": "practice_type must be one of ['job', 'soft']",
-            },
-        )
-
-    # 1) 인터뷰 조회
-    i = db.get(Interview, id)
-    if not i:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "interview_not_found",
-                "detail": "The interview with the specified ID does not exist",
-            },
-        )
-
-    # 2) 질문 뽑기
-    basic_questions = (
-        db.query(BasicQuestion)
-        .filter(BasicQuestion.label == practice_type)
-        .order_by(func.random())
-        .limit(3)
-        .all()
-    )
-    if len(basic_questions) < 3:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": "insufficient_basic_questions",
-                "detail": f"Need at least 3 basic questions of type '{practice_type}', "
-                          f"found {len(basic_questions)}",
-            },
-        )
-
-    generated_questions = (
-        db.query(GeneratedQuestion)
-        .filter(
-            GeneratedQuestion.content_id == i.id,
-            GeneratedQuestion.is_used == False,
-            GeneratedQuestion.type == practice_type,
-        )
-        .order_by(func.random())
-        .limit(2)
-        .all()
-    )
-    if len(generated_questions) < 2:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": "insufficient_generated_questions",
-                "detail": (
-                    f"Need at least 2 unused generated questions of type "
-                    f"'{practice_type}' for content_id={i.id}, "
-                    f"found {len(generated_questions)}"
-                ),
-            },
-        )
-
-    # payload용 리스트
-    all_questions_payload = []
-
-    # 세션에서 사용할 전체 질문 수
-    session_max = len(basic_questions) + len(generated_questions)
-
-    # 3) 세션 row 생성 (NOT NULL 필드 다 채우기)
-    now = datetime.now(timezone.utc)
-    s = InterviewSession(
-        user_id=i.user_id,
-        content_id=i.id,
-        status="draft",
-        started_at=now,
-        session_max=session_max,
-    )
-    db.add(s)
-    db.flush()  # s.id 확보
-
-    # 4) SessionQuestion 레코드 + payload 구성
-    # BasicQuestion
-    for order_no, bq in enumerate(basic_questions, start=1):
-        sq = SessionQuestion(
-            session_id=s.id,
-            question_type="BASIC",
-            question_id=bq.id,
-            order_no=order_no,
-        )
-        db.add(sq)
-        all_questions_payload.append({
-            "question_type": "BASIC",
-            "question_id": bq.id,
-            "order_no": order_no,
-            "text": bq.text,
-            "type": bq.label,
-        })
-
-    # GeneratedQuestion
-    for idx, gq in enumerate(generated_questions, start=1):
-        order_no = len(basic_questions) + idx
-        sq = SessionQuestion(
-            session_id=s.id,
-            question_type="GENERATED",
-            question_id=gq.id,
-            order_no=order_no,
-        )
-        db.add(sq)
-        gq.is_used = True  # 재사용 방지
-
-        all_questions_payload.append({
-            "question_type": "GENERATED",
-            "question_id": gq.id,
-            "order_no": order_no,
-            "text": gq.text,
-            "type": gq.type,
-        })
-
-    db.commit()
-    db.refresh(s)
-
-    return {
-        "message": "session_started",
-        "session_id": s.id,
-        "content_id": i.id,
-        "status": s.status,
-        "session_max": session_max,
-        "questions": all_questions_payload,
-    }
+# # 3) 메인: 연습 시작
+# @router.post("/{id}/sessions/start")
+# def start_session(
+#     id: int,
+#     payload: dict = Body(...),
+#     db: Session = Depends(get_db),
+# ):
+#     practice_type = payload.get("practice_type")
+#     if practice_type not in ["job", "soft"]:
+#         raise HTTPException(
+#             status_code=400,
+#             detail={
+#                 "message": "invalid_request_body",
+#                 "detail": "practice_type must be one of ['job', 'soft']",
+#             },
+#         )
+#
+#     # 1) 인터뷰 조회
+#     i = db.get(Interview, id)
+#     if not i:
+#         raise HTTPException(
+#             status_code=404,
+#             detail={
+#                 "message": "interview_not_found",
+#                 "detail": "The interview with the specified ID does not exist",
+#             },
+#         )
+#
+#     # 2) 질문 뽑기
+#     basic_questions = (
+#         db.query(BasicQuestion)
+#         .filter(BasicQuestion.label == practice_type)
+#         .order_by(func.random())
+#         .limit(3)
+#         .all()
+#     )
+#     if len(basic_questions) < 3:
+#         raise HTTPException(
+#             status_code=500,
+#             detail={
+#                 "message": "insufficient_basic_questions",
+#                 "detail": f"Need at least 3 basic questions of type '{practice_type}', "
+#                           f"found {len(basic_questions)}",
+#             },
+#         )
+#
+#     generated_questions = (
+#         db.query(GeneratedQuestion)
+#         .filter(
+#             GeneratedQuestion.content_id == i.id,
+#             GeneratedQuestion.is_used == False,
+#             GeneratedQuestion.type == practice_type,
+#         )
+#         .order_by(func.random())
+#         .limit(2)
+#         .all()
+#     )
+#     if len(generated_questions) < 2:
+#         raise HTTPException(
+#             status_code=500,
+#             detail={
+#                 "message": "insufficient_generated_questions",
+#                 "detail": (
+#                     f"Need at least 2 unused generated questions of type "
+#                     f"'{practice_type}' for content_id={i.id}, "
+#                     f"found {len(generated_questions)}"
+#                 ),
+#             },
+#         )
+#
+#     # payload용 리스트
+#     all_questions_payload = []
+#
+#     # 세션에서 사용할 전체 질문 수
+#     session_max = len(basic_questions) + len(generated_questions)
+#
+#     # 3) 세션 row 생성 (NOT NULL 필드 다 채우기)
+#     now = datetime.now(timezone.utc)
+#     s = InterviewSession(
+#         user_id=i.user_id,
+#         content_id=i.id,
+#         status="draft",
+#         started_at=now,
+#         session_max=session_max,
+#     )
+#     db.add(s)
+#     db.flush()  # s.id 확보
+#
+#     # 4) SessionQuestion 레코드 + payload 구성
+#     # BasicQuestion
+#     for order_no, bq in enumerate(basic_questions, start=1):
+#         sq = SessionQuestion(
+#             session_id=s.id,
+#             question_type="BASIC",
+#             question_id=bq.id,
+#             order_no=order_no,
+#         )
+#         db.add(sq)
+#         all_questions_payload.append({
+#             "question_type": "BASIC",
+#             "question_id": bq.id,
+#             "order_no": order_no,
+#             "text": bq.text,
+#             "type": bq.label,
+#         })
+#
+#     # GeneratedQuestion
+#     for idx, gq in enumerate(generated_questions, start=1):
+#         order_no = len(basic_questions) + idx
+#         sq = SessionQuestion(
+#             session_id=s.id,
+#             question_type="GENERATED",
+#             question_id=gq.id,
+#             order_no=order_no,
+#         )
+#         db.add(sq)
+#         gq.is_used = True  # 재사용 방지
+#
+#         all_questions_payload.append({
+#             "question_type": "GENERATED",
+#             "question_id": gq.id,
+#             "order_no": order_no,
+#             "text": gq.text,
+#             "type": gq.type,
+#         })
+#
+#     db.commit()
+#     db.refresh(s)
+#
+#     return {
+#         "message": "session_started",
+#         "session_id": s.id,
+#         "content_id": i.id,
+#         "status": s.status,
+#         "session_max": session_max,
+#         "questions": all_questions_payload,
+#     }
 
 # 면접 등록 페이지
 # 면접 정보 등록: POST /api/interviews/contents

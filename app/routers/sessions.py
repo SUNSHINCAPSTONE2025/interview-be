@@ -1,12 +1,16 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query, Body
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime, timezone
 import tempfile
 import os
 
 from app.deps import get_db, get_current_user
+from app.models.interviews import Interview
 from app.models.sessions import InterviewSession
 from app.models.session_question import SessionQuestion
 from app.models.attempts import Attempt
@@ -14,8 +18,12 @@ from app.models.media_asset import MediaAsset
 from app.models.basic_question import BasicQuestion
 from app.models.generated_question import GeneratedQuestion
 from app.services.storage_service import upload_video
+from app.services.question_generation_service import generate_and_store_questions_from_qas
+from app.services.resume_qas_service import load_resume_qas_for_interview
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+MIN_GENERATED = 2
 
 class QCtx(BaseModel):
     text: str
@@ -39,6 +47,15 @@ class UpdateSessionStatusRequest(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
 
+class ResumeQA(BaseModel) :
+    question: str
+    answer: str
+
+class StartSessionIn(BaseModel) :
+    practice_type : Literal["job", "soft"]
+    auto_generate : bool = False
+    qas : Optional[List[ResumeQA]] = None
+
 @router.post("/{content_id}/sessions/start", include_in_schema=False)
 def deprecated_route():
     # 설명용: 실제 경로는 /api/interviews/{id}/sessions/start 이지만
@@ -46,46 +63,271 @@ def deprecated_route():
     return {"message":"use /api/sessions/{content_id}/start"}
 
 @router.post("/{content_id}/start")
-def session_start(
+def start_session_by_content(
     content_id: int,
-    payload: StartIn,
+    payload: dict = Body(...),
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    # 기존 유효성 검사 그대로 유지
-    if not payload.use_saved_context and not (
-        payload.override_context and payload.override_context.questions
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Provide override_context.questions or enable use_saved_context",
+    # dict / Pydantic 둘 다 지원하는 헬퍼
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    try:
+        practice_type = _get(payload, "practice_type")
+        auto_generate = _get(payload, "auto_generate", False)
+        qas = _get(payload, "qas", None) or []
+
+        logger.info(
+            "[session_start] START content_id=%s practice_type=%s auto_generate=%s",
+            content_id,
+            practice_type,
+            auto_generate,
         )
 
-    # current_user dict 구조에 맞게 user_id 꺼내기
-    # (auth/me 에서 profile을 붙여주고 있다면 이런 식)
-    profile = current_user["profile"]
-    user_id = profile.id          # 또는 current_user["id"] 가 user_profiles.id 와 같다면 그걸 써도 됨
+        # 1) 인터뷰(=content) 조회
+        i = db.get(Interview, content_id)
+        if not i:
+            logger.error(
+                "[session_start] interview_not_found content_id=%s", content_id
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "interview_not_found",
+                    "detail": "The interview(content) with the specified ID does not exist",
+                },
+            )
 
-    # ⚠️ InterviewSession 에 실제로 있는 필드만 사용
-    session = InterviewSession(
-        user_id=user_id,
-        content_id=content_id,
-        status="running",                       # draft | running | done | canceled 중 하나 선택
-        started_at=datetime.now(timezone.utc),  # NOT NULL 컬럼
-        session_max=payload.count or 5,         # count가 질문 개수라면 임시로 이렇게 사용
-    )
+        # 2) BASIC 질문 3개 랜덤
+        basic_questions: List[BasicQuestion] = (
+            db.query(BasicQuestion)
+            .filter(BasicQuestion.label == practice_type)
+            .order_by(func.random())
+            .limit(3)
+            .all()
+        )
 
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+        if len(basic_questions) < 3:
+            logger.error(
+                "[session_start] insufficient_basic_questions content_id=%s "
+                "type=%s found=%s",
+                i.id,
+                practice_type,
+                len(basic_questions),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "insufficient_basic_questions",
+                    "detail": (
+                        f"Need at least 3 basic questions of type '{practice_type}', "
+                        f"found {len(basic_questions)}"
+                    ),
+                },
+            )
 
-    return {
-        "message": "generation_started",
-        "session_id": session.id,      # 이제 int PK
-        "generation_id": "gen_73bc",   # TODO: 실제 생성 작업 id로 교체
-        "status": session.status,
-    }
+        # 3) GENERATED 질문 2개 랜덤
+        def load_generated() -> List[GeneratedQuestion]:
+            return (
+                db.query(GeneratedQuestion)
+                .filter(
+                    GeneratedQuestion.content_id == i.id,
+                    GeneratedQuestion.is_used == False,
+                    GeneratedQuestion.type == practice_type,
+                )
+                .order_by(func.random())
+                .limit(MIN_GENERATED)
+                .all()
+            )
 
+        generated_questions: List[GeneratedQuestion] = load_generated()
+
+        # 4) 부족하면 → LLM으로 생성 시도
+        if len(generated_questions) < MIN_GENERATED:
+            logger.warning(
+                "[session_start] insufficient_generated_before_llm: content_id=%s "
+                "type=%s found=%s",
+                i.id,
+                practice_type,
+                len(generated_questions),
+            )
+
+            # 4-1) resume 테이블에서 자소서 Q&A 로드
+            try:
+                resume_qas = load_resume_qas_for_interview(
+                    db=db,
+                    content_id=i.id,
+                    user_id=current_user["id"],  # current_user는 dict라고 가정
+                )
+            except Exception:
+                logger.exception(
+                    "[session_start] failed_to_load_resume_qas content_id=%s", i.id
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "message": "resume_qas_load_failed",
+                        "detail": "Failed to load resume Q&A for this content",
+                    },
+                )
+
+            if not resume_qas:
+                # 자소서 Q&A 자체가 없으면 400으로 친절하게 안내
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "resume_qas_required",
+                        "detail": "먼저 이력서 기반 Q&A를 등록해 주세요.",
+                    },
+                )
+
+            # 4-2) LLM으로 GeneratedQuestion 생성
+            try:
+                logger.info(
+                    "[session_start] calling LLM to generate questions "
+                    "content_id=%s practice_type=%s",
+                    i.id,
+                    practice_type,
+                )
+
+                generate_and_store_questions_from_qas(
+                    db=db,
+                    content_id=i.id,
+                    qas=resume_qas,  # 방금 resume에서 읽어온 Q&A
+                    practice_type=practice_type,
+                )
+            except Exception:
+                logger.exception("[session_start] LLM generation failed")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "message": "question_generation_failed",
+                        "detail": "Failed to generate questions from resume Q&A",
+                    },
+                )
+
+            # 4-3) 새로 생성된 GeneratedQuestion 다시 로드
+            generated_questions = load_generated()
+
+        # 5) 그래도 모자라면 에러
+        if len(generated_questions) < MIN_GENERATED:
+            logger.error(
+                "[session_start] insufficient_generated_questions content_id=%s "
+                "type=%s found=%s",
+                i.id,
+                practice_type,
+                len(generated_questions),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "insufficient_generated_questions",
+                    "detail": (
+                        f"Need at least {MIN_GENERATED} unused generated questions of "
+                        f"type '{practice_type}' for content_id={i.id}, "
+                        f"found {len(generated_questions)}"
+                    ),
+                },
+            )
+
+        # 6) 세션 생성
+        all_questions_payload = []
+        session_max = len(basic_questions) + len(generated_questions)
+
+        now = datetime.now(timezone.utc)
+        s = InterviewSession(
+            user_id=i.user_id,
+            content_id=i.id,
+            status="draft",
+            started_at=now,
+            session_max=session_max,
+        )
+        db.add(s)
+        db.flush()  # s.id 확보
+
+        # 7) SessionQuestion + payload 구성
+        # BASIC
+        for order_no, bq in enumerate(basic_questions, start=1):
+            sq = SessionQuestion(
+                session_id=s.id,
+                question_type="BASIC",
+                question_id=bq.id,
+                order_no=order_no,
+            )
+            db.add(sq)
+            all_questions_payload.append(
+                {
+                    "question_type": "BASIC",
+                    "question_id": bq.id,
+                    "order_no": order_no,
+                    "text": bq.text,
+                    "type": bq.label,
+                }
+            )
+
+        # GENERATED
+        for idx, gq in enumerate(generated_questions, start=1):
+            order_no = len(basic_questions) + idx
+            sq = SessionQuestion(
+                session_id=s.id,
+                question_type="GENERATED",
+                question_id=gq.id,
+                order_no=order_no,
+            )
+            db.add(sq)
+            gq.is_used = True
+
+            all_questions_payload.append(
+                {
+                    "question_type": "GENERATED",
+                    "question_id": gq.id,
+                    "order_no": order_no,
+                    "text": gq.text,
+                    "type": gq.type,
+                }
+            )
+
+        db.commit()
+        db.refresh(s)
+
+        return {
+            "message": "session_started",
+            "session_id": s.id,
+            "content_id": i.id,
+            "status": s.status,
+            "session_max": session_max,
+            "questions": all_questions_payload,
+        }
+
+    # 여기서부터는 공통 예외 로깅
+    except HTTPException as exc:
+        # 우리가 일부러 던진 5xx도 콘솔에 찍기
+        if exc.status_code >= 500:
+            logger.exception(
+                "[session_start] HTTPException %s content_id=%s detail=%s",
+                exc.status_code,
+                content_id,
+                exc.detail,
+            )
+        raise
+    except Exception:
+        # 예상치 못한 에러도 모두 콘솔에 stack trace 찍기
+        logger.exception(
+            "[session_start] unexpected error while starting session content_id=%s "
+            "payload=%s",
+            content_id,
+            payload,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "internal_server_error",
+                "detail": "Unexpected error while starting session",
+            },
+        )
 
 @router.post("/{session_id}/recordings/{question_index}")
 async def upload_recording(
