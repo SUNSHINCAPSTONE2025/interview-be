@@ -19,6 +19,7 @@ from app.services.feedback_service import (
 from app.services import vocal_analysis, vocal_feedback
 from app.services.voice_analysis_service import analyze_voice_from_storage_url
 from app.services.storage_service import supabase, VIDEO_BUCKET
+from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -117,7 +118,6 @@ def _analyze_voice(audio_path: str) -> Dict[str, Any]:
 def create_or_update_voice_feedback_endpoint(
     session_id: int,
     attempt_id: int,
-    db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     logger.info(
@@ -127,9 +127,10 @@ def create_or_update_voice_feedback_endpoint(
         current_user["id"],
     )
 
-    _get_session_or_404(db, session_id, current_user["id"])
-
-    storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+    # --- 1) 짧은 세션으로 조회만 ---
+    with SessionLocal() as db_read:
+        _get_session_or_404(db_read, session_id, current_user["id"])
+        storage_url = _get_audio_storage_url(db_read, session_id, attempt_id)
     logger.info(
         "[VOICE_FEEDBACK][POST] 20%% audio_path_resolved storage_url=%s",
         storage_url,
@@ -143,7 +144,8 @@ def create_or_update_voice_feedback_endpoint(
     )
 
     # feedback_summary 테이블에 overall_voice, tremor, blank, tone, speed, comment 저장
-    create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
+    with SessionLocal() as db_write:
+        create_or_update_voice_feedback(db_write, session_id, attempt_id, voice_payload)
     logger.info(
         "[VOICE_FEEDBACK][POST] 100%% feedback_saved session_id=%s attempt_id=%s",
         session_id,
@@ -159,7 +161,6 @@ def create_or_update_voice_feedback_endpoint(
 def get_voice_feedback_endpoint(
     session_id: int,
     attempt_id: int,
-    db: OrmSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     logger.info(
@@ -169,16 +170,18 @@ def get_voice_feedback_endpoint(
         current_user["id"],
     )
 
-    _get_session_or_404(db, session_id, current_user["id"])
+    # --- 1) 짧은 세션으로 조회만 ---
+    with SessionLocal() as db_read:
+        _get_session_or_404(db_read, session_id, current_user["id"])
 
-    fs = (
-        db.query(FeedbackSummary)
-        .filter(
-            FeedbackSummary.session_id == session_id,
-            FeedbackSummary.attempt_id == attempt_id,
+        fs = (
+            db_read.query(FeedbackSummary)
+            .filter(
+                FeedbackSummary.session_id == session_id,
+                FeedbackSummary.attempt_id == attempt_id,
+            )
+            .first()
         )
-        .first()
-    )
 
     # 1) 요약이 이미 있고 값도 있으면 그대로 반환
     if fs and fs.overall_voice is not None and fs.tremor is not None:
@@ -209,7 +212,8 @@ def get_voice_feedback_endpoint(
         attempt_id,
     )
 
-    storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+    with SessionLocal() as db_read2:
+        storage_url = _get_audio_storage_url(db_read2, session_id, attempt_id)
     logger.info(
         "[VOICE_FEEDBACK][GET] audio_storage_url=%s",
         storage_url,
@@ -257,7 +261,8 @@ def get_voice_feedback_endpoint(
         )
 
         # feedback_summary 테이블에 저장
-        create_or_update_voice_feedback(db, session_id, attempt_id, voice_payload)
+        with SessionLocal() as db_write:
+            create_or_update_voice_feedback(db_write, session_id, attempt_id, voice_payload)
         logger.info(
             "[VOICE_FEEDBACK][GET] 100%% feedback_saved session_id=%s attempt_id=%s",
             session_id,

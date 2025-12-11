@@ -2,6 +2,7 @@
 # 자세 분석 시작(비동기) + 결과 조회
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from tempfile import NamedTemporaryFile
 import logging
@@ -18,6 +19,27 @@ import os
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+# Ensure module logger emits to stdout
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+def _rating_from_score(score: float | None) -> str | None:
+    if score is None:
+        return None
+    try:
+        v = float(score)
+    except Exception:
+        return None
+    if v >= 90:
+        return "양호"
+    if v >= 70:
+        return "보통"
+    return "미흡"
 
 
 # POST /api/analysis/pose/start
@@ -158,10 +180,23 @@ def get_pose_feedback(
             "session_id": session_id,
             "attempt_id": attempt_id,
             "overall_score": fs.overall_pose,
-            "posture_score": {
-                "shoulder": fs.shoulder,
-                "head_tilt": fs.head,
-                "hand": fs.hand,
+            "pose_analysis": {
+                "overall": {
+                    "value": fs.overall_pose,
+                    "rating": _rating_from_score(fs.overall_pose),
+                },
+                "shoulder": {
+                    "value": fs.shoulder,
+                    "rating": _rating_from_score(fs.shoulder),
+                },
+                "head_tilt": {
+                    "value": fs.head,
+                    "rating": _rating_from_score(fs.head),
+                },
+                "hand": {
+                    "value": fs.hand,
+                    "rating": _rating_from_score(fs.hand),
+                },
             },
             "problem_sections": getattr(fs, "problem_sections", None) or [],
         }
@@ -214,8 +249,10 @@ def get_pose_feedback(
             # Context manager로 DB 세션 관리 (자동 close)
             with SessionLocal() as db_session:
                 try:
+                    logger.info("[POSE_ANALYSIS][GET] run_pose_on_video 시작 session_id=%s attempt_id=%s path=%s", s_id, a_id, video_path_local)
                     pose_json = run_pose_on_video(video_path_local)
-                    logger.info("[POSE_ANALYSIS][GET] 분석 완료, DB 저장 시작 session_id=%s attempt_id=%s", s_id, a_id)
+                    logger.info("[POSE_ANALYSIS][GET] run_pose_on_video 완료 session_id=%s attempt_id=%s", s_id, a_id)
+                    logger.info("[POSE_ANALYSIS][GET] DB 저장 시작 session_id=%s attempt_id=%s", s_id, a_id)
                     create_or_update_pose_feedback(db_session, s_id, a_id, pose_json)
                     logger.info("[POSE_ANALYSIS][GET] DB 저장 완료 session_id=%s attempt_id=%s", s_id, a_id)
                 except Exception as e:
@@ -231,12 +268,12 @@ def get_pose_feedback(
         background_tasks.add_task(_worker, tmp_path, session_id, attempt_id)
 
         # 분석 시작됨 응답 (202 Accepted)
-        raise HTTPException(
+        return JSONResponse(
             status_code=202,
-            detail={
+            content={
                 "message": "pose_analysis_started",
                 "status": "pending",
                 "session_id": session_id,
                 "attempt_id": attempt_id,
-            }
+            },
         )
