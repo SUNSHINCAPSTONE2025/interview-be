@@ -38,7 +38,7 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
     logger.info("[VOICE] load from storage: %r", storage_path_or_url)
 
     # ffmpeg 경로 설정 (Windows에서 PATH 인식 문제 해결)
-    ffmpeg_cmd = r"C:\ffmpeg\bin\ffmpeg.exe"
+    ffmpeg_cmd = r"C:\ffmpeg-2025-12-04-git-d6458f6a8b-full_build\bin\ffmpeg.exe"
 
     # 0) 로컬 파일 경로(C:\..., \Users\..., /tmp/...)인 경우 → Supabase 거치지 않고 바로 읽기
     if os.path.isabs(storage_path_or_url):

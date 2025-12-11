@@ -37,7 +37,7 @@ class STTService:
     def _convert_to_wav(audio_bytes: bytes) -> bytes:
         """WebM/기타 형식을 WAV로 변환"""
         # ffmpeg 경로 설정 (Windows에서 PATH 인식 문제 해결)
-        ffmpeg_cmd = r"C:\ffmpeg\bin\ffmpeg.exe"
+        ffmpeg_cmd = r"C:\ffmpeg-2025-12-04-git-d6458f6a8b-full_build\bin\ffmpeg.exe"
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as input_file:
             input_file.write(audio_bytes)
