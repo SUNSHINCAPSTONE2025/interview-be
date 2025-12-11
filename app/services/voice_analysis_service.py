@@ -37,6 +37,9 @@ def _normalize_supabase_path(raw: str) -> str:
 def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
     logger.info("[VOICE] load from storage: %r", storage_path_or_url)
 
+    # ffmpeg 경로 설정 (Windows에서 PATH 인식 문제 해결)
+    ffmpeg_cmd = r"C:\ffmpeg\bin\ffmpeg.exe"
+
     # 0) 로컬 파일 경로(C:\..., \Users\..., /tmp/...)인 경우 → Supabase 거치지 않고 바로 읽기
     if os.path.isabs(storage_path_or_url):
         logger.debug("[VOICE] detected local path=%r", storage_path_or_url)
@@ -54,7 +57,7 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
                 out_path = os.path.join(tmpdir, "output.wav")
 
                 cmd = [
-                    "ffmpeg",
+                    ffmpeg_cmd,
                     "-y",
                     "-i", path,
                     "-ac", "1",
@@ -109,7 +112,7 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
 
             # ffmpeg로 wav 변환 (예: mono, 16kHz)
             cmd = [
-                "ffmpeg",
+                ffmpeg_cmd,
                 "-y",              # 덮어쓰기 허용
                 "-i", in_path,     # 입력 파일
                 "-ac", "1",        # 채널 수 (mono)
