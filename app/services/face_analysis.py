@@ -10,11 +10,10 @@ import mediapipe as mp
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.config import settings, FFMPEG_PATH
 from app.models.feedback_summary import FeedbackSummary
 from app.models.media_asset import MediaAsset
 from app.services.storage_service import supabase, VIDEO_BUCKET as BUCKET_NAME
-from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -540,7 +539,6 @@ def analyze_expression_video(
 
 # 세션 단위 분석 + DB 저장 + 응답 생성
 
-FFMPEG_BIN = r"C:\ffmpeg\bin\ffmpeg.exe"
 async def run_expression_analysis_for_session(
     session_id: int,
     attempt_id: int,
@@ -549,22 +547,21 @@ async def run_expression_analysis_for_session(
     frame_stride: int,
     db: Session,
 ):
-    # 1) 이 세션 + attempt 에 해당하는 비디오 media_asset 찾기 (짧은 세션으로 조회만)
-    with SessionLocal() as db_read:
-        media = (
-            db_read.query(MediaAsset)
-            .filter(
-                MediaAsset.session_id == session_id,
-                MediaAsset.attempt_id == attempt_id,
-                MediaAsset.kind == 1,  # 1 = video
-            )
-            .first()
+    # 1) 이 세션 + attempt 에 해당하는 비디오 media_asset 찾기
+    media = (
+        db.query(MediaAsset)
+        .filter(
+            MediaAsset.session_id == session_id,
+            MediaAsset.attempt_id == attempt_id,
+            MediaAsset.kind == 1,  # 1 = video
         )
+        .first()
+    )
 
-        if media is None:
-            raise HTTPException(status_code=404, detail="session_not_found")
+    if media is None:
+        raise HTTPException(status_code=404, detail="session_not_found")
 
-        storage_path = media.storage_url  # 예: "sessions/22/attempt_44.webm"
+    storage_path = media.storage_url  # 예: "sessions/22/attempt_44.webm"
 
     # 2) Supabase Storage 에서 파일 다운로드
     try:
@@ -597,7 +594,7 @@ async def run_expression_analysis_for_session(
         os.close(fd)
 
         cmd = [
-            FFMPEG_BIN,
+            FFMPEG_PATH,
             "-y",
             "-i", in_path,
             "-vcodec", "libx264",
@@ -650,32 +647,31 @@ async def run_expression_analysis_for_session(
             **res,
         }
 
-    # 6) feedback_summary 테이블 저장/업데이트 (짧은 세션으로 저장만)
-    with SessionLocal() as db_write:
-        summary = (
-            db_write.query(FeedbackSummary)
-            .filter(
-                FeedbackSummary.session_id == session_id,
-                FeedbackSummary.attempt_id == attempt_id,
-            )
-            .first()
+    # 6) feedback_summary 테이블 저장/업데이트
+    summary = (
+        db.query(FeedbackSummary)
+        .filter(
+            FeedbackSummary.session_id == session_id,
+            FeedbackSummary.attempt_id == attempt_id,
+        )
+        .first()
+    )
+
+    if summary is None:
+        summary = FeedbackSummary(
+            session_id=session_id,
+            attempt_id=attempt_id,
         )
 
-        if summary is None:
-            summary = FeedbackSummary(
-                session_id=session_id,
-                attempt_id=attempt_id,
-            )
+    summary.overall_face = res["overall_score"]
+    summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
+    summary.eye_blink = res["expression_analysis"]["blink_stability"]["value"]
+    summary.mouth = res["expression_analysis"]["mouth_delta"]["value"]
+    # 표정 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
+    # comment 필드는 답변 평가(LLM)용으로만 사용
 
-        summary.overall_face = res["overall_score"]
-        summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
-        summary.eye_blink = res["expression_analysis"]["blink_stability"]["value"]
-        summary.mouth = res["expression_analysis"]["mouth_delta"]["value"]
-        # 표정 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
-        # comment 필드는 답변 평가(LLM)용으로만 사용
-
-        db_write.add(summary)
-        db_write.commit()
+    db.add(summary)
+    db.commit()
 
     return {
         "message": "expression_analysis_success",

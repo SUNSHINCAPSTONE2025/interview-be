@@ -2,6 +2,7 @@ import os
 import tempfile
 import subprocess
 from google.cloud import speech_v1p1beta1 as speech
+from app.config import FFMPEG_PATH
 
 class STTService:
     @staticmethod
@@ -36,9 +37,6 @@ class STTService:
     @staticmethod
     def _convert_to_wav(audio_bytes: bytes) -> bytes:
         """WebM/기타 형식을 WAV로 변환"""
-        # ffmpeg 경로 설정 (Windows에서 PATH 인식 문제 해결)
-        ffmpeg_cmd = r"C:\ffmpeg\bin\ffmpeg.exe"
-
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as input_file:
             input_file.write(audio_bytes)
             input_path = input_file.name
@@ -50,7 +48,7 @@ class STTService:
             # ffmpeg로 WAV 변환 (mono, 16kHz)
             subprocess.run(
                 [
-                    ffmpeg_cmd,
+                    FFMPEG_PATH,
                     "-i", input_path,
                     "-ar", "16000",  # 16kHz sample rate
                     "-ac", "1",       # mono
