@@ -180,15 +180,27 @@ def get_voice_feedback_endpoint(
         .first()
     )
 
-    # 1) 요약이 이미 있으면 그대로 반환
-    if fs:
+    # 1) 요약이 이미 있고 값도 있으면 그대로 반환
+    if fs and fs.overall_voice is not None and fs.tremor is not None:
         logger.info(
-            "[VOICE_FEEDBACK][GET] summary_found session_id=%s attempt_id=%s overall_voice=%s",
+            "[VOICE_FEEDBACK][GET] summary_found_with_values session_id=%s attempt_id=%s overall_voice=%s tremor=%s blank=%s tone=%s speed=%s",
             session_id,
             attempt_id,
             fs.overall_voice,
+            fs.tremor,
+            fs.blank,
+            fs.tone,
+            fs.speed,
         )
         return build_voice_payload_from_summary(fs)
+
+    # 1-1) 레코드는 있지만 값이 None인 경우
+    if fs:
+        logger.warning(
+            "[VOICE_FEEDBACK][GET] summary_exists_but_values_are_null session_id=%s attempt_id=%s → will_analyze",
+            session_id,
+            attempt_id,
+        )
 
     # 2) 없으면 자동 분석
     logger.info(
@@ -198,6 +210,10 @@ def get_voice_feedback_endpoint(
     )
 
     storage_url = _get_audio_storage_url(db, session_id, attempt_id)
+    logger.info(
+        "[VOICE_FEEDBACK][GET] audio_storage_url=%s",
+        storage_url,
+    )
 
     # Supabase Storage에서 파일 다운로드
     try:

@@ -539,7 +539,7 @@ def analyze_expression_video(
 
 # 세션 단위 분석 + DB 저장 + 응답 생성
 
-FFMPEG_BIN = which("ffmpeg") or "ffmpeg"
+FFMPEG_BIN = r"C:\ffmpeg\bin\ffmpeg.exe"
 async def run_expression_analysis_for_session(
     session_id: int,
     attempt_id: int,
@@ -631,22 +631,22 @@ async def run_expression_analysis_for_session(
                 except OSError:
                     pass
 
-        # 🔹 5-1) 분석 불가(status=analysis_unavailable)인 경우: DB에 점수 안 쓰고 그대로 리턴
-        if res.get("status") == "analysis_unavailable" or res.get("expression_analysis") is None:
-            logger.info(
-                "[EXPR] analysis_unavailable session_id=%s attempt_id=%s reason=%s",
-                session_id,
-                attempt_id,
-                res.get("error_code"),
-            )
-            # DB에 summary 레코드 하나 정도는 남기고 싶다면 여기서 comment만 저장해도 됨 (선택)
-            # 지금은 일단 DB 건드리지 않고 바로 응답만 내려줌
-            return {
-                "message": "expression_analysis_unavailable",
-                "session_id": session_id,
-                "attempt_id": attempt_id,
-                **res,
-            }
+    # 🔹 5-1) 분석 불가(status=analysis_unavailable)인 경우: DB에 점수 안 쓰고 그대로 리턴
+    if res.get("status") == "analysis_unavailable" or res.get("expression_analysis") is None:
+        logger.info(
+            "[EXPR] analysis_unavailable session_id=%s attempt_id=%s reason=%s",
+            session_id,
+            attempt_id,
+            res.get("error_code"),
+        )
+        # DB에 summary 레코드 하나 정도는 남기고 싶다면 여기서 comment만 저장해도 됨 (선택)
+        # 지금은 일단 DB 건드리지 않고 바로 응답만 내려줌
+        return {
+            "message": "expression_analysis_unavailable",
+            "session_id": session_id,
+            "attempt_id": attempt_id,
+            **res,
+        }
 
     # 6) feedback_summary 테이블 저장/업데이트
     summary = (
@@ -668,7 +668,8 @@ async def run_expression_analysis_for_session(
     summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
     summary.eye_blink = res["expression_analysis"]["blink_stability"]["value"]
     summary.mouth = res["expression_analysis"]["mouth_delta"]["value"]
-    summary.comment = res["feedback_summary"]
+    # 표정 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
+    # comment 필드는 답변 평가(LLM)용으로만 사용
 
     db.add(summary)
     db.commit()

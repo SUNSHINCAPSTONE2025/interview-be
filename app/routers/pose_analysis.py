@@ -4,8 +4,10 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from tempfile import NamedTemporaryFile
+import logging
 
 from app.deps import get_db, get_current_user
+from app.db.session import SessionLocal
 from app.models.sessions import InterviewSession
 from app.models.media_asset import MediaAsset
 from app.models.feedback_summary import FeedbackSummary
@@ -15,6 +17,7 @@ from app.services.storage_service import supabase, VIDEO_BUCKET
 import os
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # POST /api/analysis/pose/start
@@ -70,18 +73,24 @@ def start_pose_analysis(
 
     # Background task: 분석 수행 및 DB 저장
     def _worker(video_path_local: str, s_id: int, a_id: int):
-        try:
-            pose_json = run_pose_on_video(video_path_local)
-            # feedback_summary(session_id, attempt_id)에 저장되도록 서비스 함수도 같이 수정
-            create_or_update_pose_feedback(db, s_id, a_id, pose_json)
-        except Exception as e:
-            print("pose analysis error:", e)
-        finally:
-            # 임시 파일 삭제
+        logger.info("[POSE_ANALYSIS][POST] 백그라운드 분석 시작 session_id=%s attempt_id=%s", s_id, a_id)
+
+        # Context manager로 DB 세션 관리 (자동 close)
+        with SessionLocal() as db_session:
             try:
-                os.remove(video_path_local)
-            except OSError:
-                pass
+                pose_json = run_pose_on_video(video_path_local)
+                logger.info("[POSE_ANALYSIS][POST] 분석 완료, DB 저장 시작 session_id=%s attempt_id=%s", s_id, a_id)
+                create_or_update_pose_feedback(db_session, s_id, a_id, pose_json)
+                logger.info("[POSE_ANALYSIS][POST] DB 저장 완료 session_id=%s attempt_id=%s", s_id, a_id)
+            except Exception as e:
+                logger.error("[POSE_ANALYSIS][POST] 백그라운드 분석 에러 session_id=%s attempt_id=%s error=%s", s_id, a_id, str(e))
+                logger.exception(e)
+
+        # 임시 파일 삭제 (with 블록 밖에서)
+        try:
+            os.remove(video_path_local)
+        except OSError:
+            pass
 
     background_tasks.add_task(_worker, tmp_path, session_id, attempt_id)
 
@@ -123,8 +132,50 @@ def get_pose_feedback(
         .first()
     )
 
-    # 결과가 없으면 자동으로 분석 시작
-    if not fs:
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.info(
+        "[POSE_FEEDBACK][GET] query_result session_id=%s attempt_id=%s fs_exists=%s",
+        session_id,
+        attempt_id,
+        fs is not None,
+    )
+
+    # 결과가 있고 값도 있으면 반환
+    if fs and fs.overall_pose is not None and fs.shoulder is not None:
+        logger.info(
+            "[POSE_FEEDBACK][GET] summary_found_with_values session_id=%s attempt_id=%s overall_pose=%s shoulder=%s head=%s hand=%s",
+            session_id,
+            attempt_id,
+            fs.overall_pose,
+            fs.shoulder,
+            fs.head,
+            fs.hand,
+        )
+        return {
+            "message": "pose_analysis_success",
+            "session_id": session_id,
+            "attempt_id": attempt_id,
+            "overall_score": fs.overall_pose,
+            "posture_score": {
+                "shoulder": fs.shoulder,
+                "head_tilt": fs.head,
+                "hand": fs.hand,
+            },
+            "problem_sections": getattr(fs, "problem_sections", None) or [],
+        }
+
+    # 레코드는 있지만 값이 None인 경우
+    if fs:
+        logger.warning(
+            "[POSE_FEEDBACK][GET] summary_exists_but_values_are_null session_id=%s attempt_id=%s → will_analyze",
+            session_id,
+            attempt_id,
+        )
+
+    # 결과가 없거나 값이 None이면 자동으로 분석 시작
+    if not fs or fs.overall_pose is None:
         # media 조회 (video kind=1)
         media = (
             db.query(MediaAsset)
@@ -158,17 +209,24 @@ def get_pose_feedback(
 
         # Background task: 분석 수행 및 DB 저장
         def _worker(video_path_local: str, s_id: int, a_id: int):
-            try:
-                pose_json = run_pose_on_video(video_path_local)
-                create_or_update_pose_feedback(db, s_id, a_id, pose_json)
-            except Exception as e:
-                print("pose analysis error:", e)
-            finally:
-                # 임시 파일 삭제
+            logger.info("[POSE_ANALYSIS][GET] 백그라운드 분석 시작 session_id=%s attempt_id=%s", s_id, a_id)
+
+            # Context manager로 DB 세션 관리 (자동 close)
+            with SessionLocal() as db_session:
                 try:
-                    os.remove(video_path_local)
-                except OSError:
-                    pass
+                    pose_json = run_pose_on_video(video_path_local)
+                    logger.info("[POSE_ANALYSIS][GET] 분석 완료, DB 저장 시작 session_id=%s attempt_id=%s", s_id, a_id)
+                    create_or_update_pose_feedback(db_session, s_id, a_id, pose_json)
+                    logger.info("[POSE_ANALYSIS][GET] DB 저장 완료 session_id=%s attempt_id=%s", s_id, a_id)
+                except Exception as e:
+                    logger.error("[POSE_ANALYSIS][GET] 백그라운드 분석 에러 session_id=%s attempt_id=%s error=%s", s_id, a_id, str(e))
+                    logger.exception(e)
+
+            # 임시 파일 삭제 (with 블록 밖에서)
+            try:
+                os.remove(video_path_local)
+            except OSError:
+                pass
 
         background_tasks.add_task(_worker, tmp_path, session_id, attempt_id)
 
@@ -182,18 +240,3 @@ def get_pose_feedback(
                 "attempt_id": attempt_id,
             }
         )
-
-    # 결과 있음 → 반환
-    return {
-        "message": "pose_analysis_success",
-        "session_id": session_id,
-        "attempt_id": attempt_id,
-        "overall_score": fs.overall_pose,
-        "posture_score": {
-            "shoulder": fs.shoulder,
-            "head_tilt": fs.head,
-            "hand": fs.hand,
-        },
-        # 필요하면 feedback_summary에 problem_sections(text/json) 컬럼을 추가해서 사용
-        "problem_sections": getattr(fs, "problem_sections", None) or [],
-    }

@@ -193,7 +193,19 @@ def run_pose_on_video(video_path: str):
                     msg = advice_map[col]
                 alerts.append({"start_time": start_f/fps, "end_time": end_f/fps, "issue": col, "message": msg})
 
-        overall_score = np.mean([df['shoulder'].mean()*100, df['head_tilt'].mean()*100, df['hand'].mean()*100])
+        shoulder_val = round(df['shoulder'].mean()*100,2)
+        head_tilt_val = round(df['head_tilt'].mean()*100,2)
+        hand_val = round(df['hand'].mean()*100,2)
+        overall_score = np.mean([shoulder_val, head_tilt_val, hand_val])
+
+        def get_rating(score):
+            if score >= 90:
+                return "양호"
+            elif score >= 70:
+                return "보통"
+            else:
+                return "미흡"
+
         return {
             "feedback_timeline": alerts,
             "problem_sections": {
@@ -202,10 +214,10 @@ def run_pose_on_video(video_path: str):
                 "hand": [[s/fps, e/fps] for s,e in problem_sections[2]]
             },
             "overall_score": round(overall_score,2),
-            "posture_score": {
-                "shoulder": round(df['shoulder'].mean()*100,2),
-                "head_tilt": round(df['head_tilt'].mean()*100,2),
-                "hand": round(df['hand'].mean()*100,2)
+            "category_scores": {
+                "shoulder": {"value": shoulder_val, "rating": get_rating(shoulder_val)},
+                "head_tilt": {"value": head_tilt_val, "rating": get_rating(head_tilt_val)},
+                "hand": {"value": hand_val, "rating": get_rating(hand_val)}
             }
         }
 

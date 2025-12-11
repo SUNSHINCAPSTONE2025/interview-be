@@ -1,9 +1,13 @@
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+import logging
+import traceback
 
 from app.deps import get_db
 from app.services.face_analysis import run_expression_analysis_for_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/feedback",
@@ -34,5 +38,7 @@ async def expression_feedback(
 
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=500, detail="internal_server_error")
+    except Exception as e:
+        logger.error(f"[EXPR_FEEDBACK] Error in expression_feedback: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"internal_server_error: {str(e)}")
