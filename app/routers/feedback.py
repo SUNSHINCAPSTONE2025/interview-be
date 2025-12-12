@@ -7,12 +7,14 @@ import traceback
 
 from app.deps import get_db, get_current_user
 from app.services.face_analysis import run_expression_analysis_for_session
+from app.services.storage_service import get_signed_url
 from app.models.sessions import InterviewSession
 from app.models.attempts import Attempt
 from app.models.feedback_summary import FeedbackSummary
 from app.models.session_question import SessionQuestion
 from app.models.basic_question import BasicQuestion
 from app.models.generated_question import GeneratedQuestion
+from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
 
@@ -273,3 +275,127 @@ def get_all_attempts_feedback(
         "session_id": session_id,
         "attempts": result_attempts,
     }
+
+
+@router.get("/sessions/{session_id}/attempts/{attempt_id}/video")
+def get_attempt_video_url(
+    session_id: int,
+    attempt_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    특정 attempt의 동영상 signed URL 조회
+
+    Args:
+        session_id: 세션 ID
+        attempt_id: Attempt ID
+        db: DB 세션
+        current_user: 현재 사용자 정보
+
+    Returns:
+        {
+            "session_id": int,
+            "attempt_id": int,
+            "video_url": str,  # Supabase Storage signed URL
+            "expires_in": int  # 초 단위 (3600 = 1시간)
+        }
+
+    Raises:
+        401: 인증되지 않은 경우
+        403: 권한이 없는 경우 (다른 사용자의 세션)
+        404: 동영상이 존재하지 않는 경우
+    """
+    logger.info(
+        "[VIDEO_URL] START session_id=%s attempt_id=%s user_id=%s",
+        session_id,
+        attempt_id,
+        current_user["id"],
+    )
+
+    # 1) 세션 소유권 확인
+    session = (
+        db.query(InterviewSession)
+        .filter(
+            InterviewSession.id == session_id,
+            InterviewSession.user_id == current_user["id"],
+        )
+        .first()
+    )
+    if not session:
+        logger.warning(
+            "[VIDEO_URL] Session not found or forbidden: session_id=%s user_id=%s",
+            session_id,
+            current_user["id"],
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="forbidden"
+        )
+
+    # 2) MediaAsset에서 동영상 파일 조회 (kind=1: video 또는 kind=3: audio)
+    # 같은 .webm 파일이 video(1)와 audio(3)로 중복 등록되므로 둘 다 확인
+    media_asset = (
+        db.query(MediaAsset)
+        .filter(
+            MediaAsset.session_id == session_id,
+            MediaAsset.attempt_id == attempt_id,
+            MediaAsset.kind.in_([1, 3]),  # video(1) 또는 audio(3)
+        )
+        .first()
+    )
+
+    if not media_asset:
+        logger.warning(
+            "[VIDEO_URL] Video not found: session_id=%s attempt_id=%s",
+            session_id,
+            attempt_id,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail="video_not_found"
+        )
+
+    # 3) Supabase Storage Signed URL 생성 (1시간 유효)
+    bucket_name = "interview_media_asset_video"
+    storage_path = media_asset.storage_url  # 예: "sessions/123/attempt_456.webm"
+    expires_in = 3600  # 1시간
+
+    try:
+        signed_url = get_signed_url(bucket_name, storage_path, expires_in)
+
+        if not signed_url:
+            logger.error(
+                "[VIDEO_URL] Failed to generate signed URL: session_id=%s attempt_id=%s path=%s",
+                session_id,
+                attempt_id,
+                storage_path,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="failed_to_generate_signed_url"
+            )
+
+        logger.info(
+            "[VIDEO_URL] SUCCESS session_id=%s attempt_id=%s",
+            session_id,
+            attempt_id,
+        )
+
+        return {
+            "session_id": session_id,
+            "attempt_id": attempt_id,
+            "video_url": signed_url,
+            "expires_in": expires_in,
+        }
+
+    except Exception as e:
+        logger.error(
+            "[VIDEO_URL] Error generating signed URL: %s",
+            str(e),
+        )
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"internal_server_error: {str(e)}"
+        )
