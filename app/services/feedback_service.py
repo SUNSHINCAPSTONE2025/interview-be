@@ -128,8 +128,6 @@ def create_or_update_pose_feedback(db, session_id: int, attempt_id: int, pose_js
     fs.shoulder = pose_json.get("category_scores", {}).get("shoulder", {}).get("value")
     fs.head = pose_json.get("category_scores", {}).get("head_tilt", {}).get("value")
     fs.hand = pose_json.get("category_scores", {}).get("hand", {}).get("value")
-    fs.problem_sections = pose_json.get("problem_sections")
-    fs.created_at = func.now()  # datetime.utcnow() → DB에서 현재 시각 자동 기록
 
     db.add(fs)
     db.commit()
@@ -158,8 +156,8 @@ def create_or_update_voice_feedback(db, session_id: int, attempt_id: int, voice_
     if speed_m:
         fs.speed = speed_m.get("score")
 
-    # 음성 한줄 요약
-    fs.comment = voice_json.get("summary")
+    # 음성 한줄 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
+    # comment 필드는 답변 평가(LLM)용으로만 사용
 
     db.add(fs)
     db.commit()
@@ -170,12 +168,13 @@ def create_or_update_voice_feedback(db, session_id: int, attempt_id: int, voice_
 def build_voice_payload_from_summary(fs: FeedbackSummary) -> dict:
     """
     GET /api/sessions/{id}/voice-feedback 응답용 간단 payload 생성.
+    comment 필드는 답변 평가(LLM)용이므로 음성 피드백에서는 사용하지 않음.
     """
     total = fs.overall_voice or fs.overall or 0.0
 
     return {
         "total_score": int(round(total)),
-        "summary": fs.comment or "",
+        "summary": "",  # 음성 요약은 DB에 저장하지 않으므로 빈 문자열
         "metrics": [
             {
                 "id": "tremor",

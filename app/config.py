@@ -4,6 +4,7 @@
 from dotenv import load_dotenv
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from shutil import which
 
 load_dotenv()  # feat#6 방식 유지: .env 파일 먼저 읽기
 
@@ -19,6 +20,9 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str | None = None
+
+    # FFMPEG 경로 (환경변수로 설정 가능, 없으면 PATH에서 자동 탐색)
+    ffmpeg_path: str | None = None
 
     # Supabase & DB 필수 설정
     database_url: str                        # DATABASE_URL
@@ -39,8 +43,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# FFMPEG 경로를 환경변수 또는 시스템 PATH에서 자동으로 찾기
+FFMPEG_PATH = settings.ffmpeg_path or which("ffmpeg") or "ffmpeg"
+
 if __name__ == "__main__":
     print("BASE_DIR:", BASE_DIR)
     print("DATABASE_URL:", settings.database_url)
     print("SUPABASE_URL:", settings.supabase_url)
     print("SUPABASE_ANON_KEY 앞 10글자:", settings.supabase_anon_key[:10], "...")
+    print("FFMPEG_PATH:", FFMPEG_PATH)

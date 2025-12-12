@@ -6,7 +6,7 @@ import soundfile as sf
 from supabase import create_client
 from urllib.parse import urlparse
 from app.services import vocal_analysis, vocal_feedback
-from app.config import settings
+from app.config import settings, FFMPEG_PATH
 import parselmouth, librosa
 import logging
 
@@ -54,7 +54,7 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
                 out_path = os.path.join(tmpdir, "output.wav")
 
                 cmd = [
-                    "ffmpeg",
+                    FFMPEG_PATH,
                     "-y",
                     "-i", path,
                     "-ac", "1",
@@ -109,7 +109,7 @@ def _load_sound_from_storage_url(storage_path_or_url: str) -> parselmouth.Sound:
 
             # ffmpeg로 wav 변환 (예: mono, 16kHz)
             cmd = [
-                "ffmpeg",
+                FFMPEG_PATH,
                 "-y",              # 덮어쓰기 허용
                 "-i", in_path,     # 입력 파일
                 "-ac", "1",        # 채널 수 (mono)

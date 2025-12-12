@@ -25,6 +25,8 @@ from app.routers import user_profile as user_profile_router
 from app.routers import sessions_voice
 from app.routers import pose_analysis
 from app.routers import feedback as feedback_router
+from app.routers import answer_stt
+from app.routers import answer_eval
 
 # ------------------------
 # 1) FastAPI 앱 생성
@@ -59,6 +61,8 @@ app.include_router(user_profile_router.router)
 app.include_router(pose_analysis.router)
 app.include_router(sessions_voice.router)
 app.include_router(feedback_router.router)
+app.include_router(answer_stt.router)
+app.include_router(answer_eval.router)
 
 # ------------------------
 # 4) Root 엔드포인트
