@@ -4,6 +4,14 @@ from sqlalchemy import func
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
+import math
+
+def safe_num(x):
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except Exception:
+        return None
 
 # (1) 포즈 피드백 관련 함수
 
@@ -124,10 +132,16 @@ def create_or_update_pose_feedback(db, session_id: int, attempt_id: int, pose_js
     """
     fs = get_or_create_feedback_summary(db, session_id, attempt_id)
 
-    fs.overall_pose = pose_json.get("overall_score")
-    fs.shoulder = pose_json.get("category_scores", {}).get("shoulder", {}).get("value")
-    fs.head = pose_json.get("category_scores", {}).get("head_tilt", {}).get("value")
-    fs.hand = pose_json.get("category_scores", {}).get("hand", {}).get("value")
+    fs.overall_pose = safe_num(pose_json.get("overall_score"))
+    fs.shoulder = safe_num(
+        pose_json.get("category_scores", {}).get("shoulder", {}).get("value")
+    )
+    fs.head = safe_num(
+        pose_json.get("category_scores", {}).get("head_tilt", {}).get("value")
+    )
+    fs.hand = safe_num(
+        pose_json.get("category_scores", {}).get("hand", {}).get("value")
+    )
 
     db.add(fs)
     db.commit()
@@ -136,25 +150,25 @@ def create_or_update_pose_feedback(db, session_id: int, attempt_id: int, pose_js
 def create_or_update_voice_feedback(db, session_id: int, attempt_id: int, voice_json: dict) -> FeedbackSummary:
     fs = get_or_create_feedback_summary(db, session_id, attempt_id)
 
-    fs.overall_voice = voice_json.get("total_score")
+    fs.overall_voice = safe_num(voice_json.get("total_score"))
 
     metrics = {m["id"]: m for m in voice_json.get("metrics", [])}
 
     tremor_m = metrics.get("tremor")
     if tremor_m:
-        fs.tremor = tremor_m.get("score")
+        fs.tremor = safe_num(tremor_m.get("score"))
 
     pause_m = metrics.get("pause")
     if pause_m:
-        fs.blank = pause_m.get("score")
+        fs.blank = safe_num(pause_m.get("score"))
 
     tone_m = metrics.get("tone")
     if tone_m:
-        fs.tone = tone_m.get("score")
+        fs.tone = safe_num(tone_m.get("score"))
 
     speed_m = metrics.get("speed")
     if speed_m:
-        fs.speed = speed_m.get("score")
+        fs.speed = safe_num(speed_m.get("score"))
 
     # 음성 한줄 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
     # comment 필드는 답변 평가(LLM)용으로만 사용
