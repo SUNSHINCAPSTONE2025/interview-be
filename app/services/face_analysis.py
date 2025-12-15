@@ -662,11 +662,16 @@ async def run_expression_analysis_for_session(
             session_id=session_id,
             attempt_id=attempt_id,
         )
+    overall_face_val = float(res["overall_score"])
+    gaze_val = float(res["expression_analysis"]["head_eye_gaze_rate"]["value"])
+    eye_blink_val = float(res["expression_analysis"]["blink_stability"]["value"])
+    mouth_val = float(res["expression_analysis"]["mouth_delta"]["value"])
 
-    summary.overall_face = res["overall_score"]
-    summary.gaze = res["expression_analysis"]["head_eye_gaze_rate"]["value"]
-    summary.eye_blink = res["expression_analysis"]["blink_stability"]["value"]
-    summary.mouth = res["expression_analysis"]["mouth_delta"]["value"]
+    summary.overall_face = overall_face_val
+    summary.gaze = gaze_val
+    summary.eye_blink = eye_blink_val
+    summary.mouth = mouth_val
+    summary.comment = res["feedback_summary"]
     # 표정 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
     # comment 필드는 답변 평가(LLM)용으로만 사용
 
