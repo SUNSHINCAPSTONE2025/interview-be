@@ -1,94 +1,128 @@
-# app/routers/auth.py
-# "내 정보 보기 / 프로필 수정 / 로그아웃" 같은 Auth 관련 API 엔드포인트
-from datetime import datetime
-from typing import Literal
-
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict
+# 실제 API 라우터
+# /api/auth의 회원가입/로그인/이메일 인증/비번 재설정/토큰 재발급
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import Optional
 
-from app.deps import get_db, get_current_user
-from app.models.user_profile import UserProfile
+from app.deps import get_db
+from app.models.user import User
+from app.routers.services import auth as svc
+from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# ---------- Schemas ----------
-class MeOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: str
-    email: str | None = None
-    display_name: str | None = None
-    status: Literal["active", "blocked", "deleted"]
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+# ---------- utils ----------
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    return db.query(User).filter(User.email == email).first()
 
-class ProfileUpdateIn(BaseModel):
-    display_name: str | None = Field(None, max_length=100)
-    status: Literal["active", "blocked", "deleted"] | None = None
+def bearer_token(auth_header: Optional[str]) -> str:
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail={"message": "unauthorized"})
+    return auth_header.split()[1]
 
-# ---------- Helpers ----------
-def _guard_blocked(profile: UserProfile):
-    if profile.status == "blocked":
-        # 서비스 정책에 맞춰 메시지 조정 가능
-        raise HTTPException(status_code=403, detail="account_blocked")
+# ---------- endpoints ----------
+@router.post("/signup", status_code=201)
+def signup(payload: svc.SignupIn, db: Session = Depends(get_db)):
+    if get_user_by_email(db, payload.email):
+        raise HTTPException(status_code=409, detail={"message": "email_already_in_use"})
+    user = User(
+        name=payload.name,
+        email=payload.email,
+        password_hash=svc.hash_password(payload.password),
+        email_verified=False,
+        email_verify_token=str(__import__("uuid").uuid4()),
+    )
+    db.add(user); db.commit(); db.refresh(user)
+    svc.send_verification_email(user.email, user.email_verify_token)
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "email_verified": user.email_verified,
+    }
 
-# ---------- Endpoints ----------
-# @router.get("/me", response_model=MeOut, response_model_exclude_none=True)
-# def me(user=Depends(get_current_user)):
-#     """
-#     현재 로그인한 사용자 정보 조회.
-#     - 인증: Supabase Access Token (Authorization: Bearer <token>)
-#     - 반환: auth.users.id(=id), email(토큰 클레임), user_profiles의 표시명/상태/타임스탬프
-#     """
-#     profile: UserProfile = user["profile"]
-#     _guard_blocked(profile)
-#     return MeOut(
-#         id=user["id"],
-#         email=user["email"],
-#         display_name=profile.display_name,
-#         status=profile.status,
-#         created_at=getattr(profile, "created_at", None),
-#         updated_at=getattr(profile, "updated_at", None),
-#     )
+@router.post("/login")
+def login(payload: svc.LoginIn, db: Session = Depends(get_db), x_forwarded_for: Optional[str] = Header(None)):
+    key = f"{x_forwarded_for or 'local'}:{payload.email}"
+    if svc.too_many_attempts(key, settings.RATE_LIMIT_ATTEMPTS, settings.RATE_LIMIT_WINDOW_SEC):
+        raise HTTPException(status_code=429, detail={"message":"rate_limited","detail":"Too many login attempts. Try again later."})
+
+    user = get_user_by_email(db, payload.email)
+    if not user or not svc.verify_password(payload.password, user.password_hash):
+        svc.record_attempt(key)
+        raise HTTPException(status_code=401, detail={"message":"invalid_credentials","detail":"email or password is incorrect"})
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail={"message":"email_not_verified","detail":"Please verify your email before logging in"})
+
+    return {
+        "message": "login_success",
+        "access_token": svc.create_access_token(str(user.id)),
+        "refresh_token": svc.create_refresh_token(str(user.id)),
+        "user": {"id": f"u{user.id}", "name": user.name, "email": user.email, "email_verified": user.email_verified},
+    }
+
+@router.post("/verify-email/send")
+def verify_email_send(payload: svc.EmailIn, db: Session = Depends(get_db)):
+    user = get_user_by_email(db, payload.email)
+    # 보안상 존재여부는 노출하지 않음
+    if user:
+        import uuid
+        user.email_verify_token = str(uuid.uuid4())
+        db.add(user); db.commit()
+        svc.send_verification_email(user.email, user.email_verify_token)
+    return {"message": "verification_email_sent"}
+
+@router.post("/verify-email/confirm")
+def verify_email_confirm(payload: svc.TokenIn, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email_verify_token == payload.token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail={"message": "invalid_or_expired_token"})
+    user.email_verified = True
+    user.email_verify_token = None
+    db.add(user); db.commit()
+    return {"message": "email_verified_successfully"}
+
+@router.post("/password/forgot")
+def password_forgot(payload: svc.EmailIn, db: Session = Depends(get_db)):
+    user = get_user_by_email(db, payload.email)
+    if user:
+        import uuid
+        user.email_verify_token = str(uuid.uuid4())  # reset 토큰으로 사용
+        db.add(user); db.commit()
+        svc.send_password_reset_email(user.email, user.email_verify_token)
+    return {"message": "password_reset_email_sent"}
+
+@router.post("/password/reset")
+def password_reset(payload: svc.PasswordResetIn, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email_verify_token == payload.token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail={"message": "invalid_or_expired_token"})
+    user.password_hash = svc.hash_password(payload.new_password)
+    user.email_verify_token = None
+    db.add(user); db.commit()
+    return {"message": "password_reset_success"}
+
+@router.post("/token/refresh")
+def token_refresh(payload: svc.TokenRefreshIn):
+    try:
+        data = svc.decode_token(payload.refresh_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail={"message":"invalid_refresh_token"})
+    if data.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail={"message":"invalid_refresh_token"})
+    new_access = svc.create_access_token(data["sub"])
+    return {"message": "token_refreshed", "access_token": new_access}
 
 @router.get("/me")
-async def me(current_user = Depends(get_current_user)):
-    return current_user
-
-@router.patch("/profile", response_model=MeOut, response_model_exclude_none=True)
-def update_profile(
-    body: ProfileUpdateIn,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    내 프로필 수정 (표시이름/상태).
-    - RLS로 본인 행만 수정 가능.
-    - status는 'active' | 'blocked' | 'deleted' 만 허용.
-    """
-    profile: UserProfile = user["profile"]
-    _guard_blocked(profile)
-
-    if body.display_name is not None:
-        profile.display_name = body.display_name.strip() or None
-    if body.status is not None:
-        profile.status = body.status
-
-    db.add(profile)  # get_db()가 커밋/롤백 처리
-
-    return MeOut(
-        id=user["id"],
-        email=user["email"],
-        display_name=profile.display_name,
-        status=profile.status,
-        created_at=getattr(profile, "created_at", None),
-        updated_at=getattr(profile, "updated_at", None),
-    )
-
-@router.post("/logout", status_code=204)
-def logout():
-    """
-    서버 세션은 없음. 클라에서 supabase.auth.signOut() 호출.
-    이 엔드포인트는 UX용으로 204만 반환.
-    """
-    return
+def me(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
+    token = bearer_token(authorization)
+    try:
+        data = svc.decode_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail={"message":"unauthorized"})
+    if data.get("type") != "access":
+        raise HTTPException(status_code=401, detail={"message":"unauthorized"})
+    user = db.query(User).get(int(data["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail={"message":"unauthorized"})
+    return {"id": user.id, "name": user.name, "email": user.email, "email_verified": user.email_verified}

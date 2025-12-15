@@ -7,5 +7,6 @@ venv/
 .env
 env/
 __pycache__/
+**/__pycache__/
 *.pyc
 wide-ratio-480111-c0-644be7c864b6.json
