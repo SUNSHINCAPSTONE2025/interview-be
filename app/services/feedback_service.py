@@ -247,7 +247,6 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     - summary: 떨림/머뭇거림/억양/속도까지 포함한 한 줄~두 줄 요약
     - metrics: FE 그래프용 개별 지표
     """
-    # 안전하게 float로 변환
     total = _to_float(fs.overall_voice) or 0.0
 
     tremor_val = _to_float(fs.tremor)
@@ -255,16 +254,23 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     tone_val = _to_float(fs.tone)
     speed_val = _to_float(fs.speed)
 
-    # 개별 메트릭 리스트 (FE에서 그대로 쓰던 구조 유지)
+    def level_kr(v: Optional[float]) -> Optional[str]:
+        if v is None:
+            return None
+        if v >= 80:
+            return "양호"
+        if v >= 60:
+            return "보통"
+        return "개선필요"  # 원하면 "미흡"으로 변경 가능
+
     metrics: List[Dict[str, Any]] = [
-        {"id": "tremor", "label": "떨림", "score": tremor_val},
-        {"id": "pause", "label": "머뭇거림", "score": pause_val},
-        {"id": "tone", "label": "억양", "score": tone_val},
-        {"id": "speed", "label": "속도", "score": speed_val},
+        {"id": "tremor", "label": "떨림", "score": tremor_val, "level": level_kr(tremor_val)},
+        {"id": "pause", "label": "공백", "score": pause_val, "level": level_kr(pause_val)},  # 라벨 "공백" 추천
+        {"id": "tone", "label": "억양", "score": tone_val, "level": level_kr(tone_val)},
+        {"id": "speed", "label": "속도", "score": speed_val, "level": level_kr(speed_val)},
     ]
 
-    # ----- summary 생성 로직 -----
-    # 기준: 0~100 점수를 3단계(좋음/보통/주의)로 나눠서 문장 조합
+    # ----- summary 생성 로직 (그대로 유지) -----
     def level(v: Optional[float]) -> Optional[str]:
         if v is None:
             return None
@@ -285,7 +291,6 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
 
     detail_sentences: List[str] = []
 
-    # 떨림
     tremor_lv = level(tremor_val)
     if tremor_lv == "good":
         detail_sentences.append("목소리 떨림 없이 비교적 안정적으로 말했습니다.")
@@ -294,7 +299,6 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     elif tremor_lv == "bad":
         detail_sentences.append("긴장으로 인한 목소리 떨림이 자주 느껴졌습니다.")
 
-    # 머뭇거림(pause)
     pause_lv = level(pause_val)
     if pause_lv == "good":
         detail_sentences.append("머뭇거림이 거의 없어 답변 흐름이 자연스러웠습니다.")
@@ -303,7 +307,6 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     elif pause_lv == "bad":
         detail_sentences.append("답변 중 머뭇거림이 길거나 자주 나타나 핵심 메시지가 약해질 수 있습니다.")
 
-    # 억양(tone)
     tone_lv = level(tone_val)
     if tone_lv == "good":
         detail_sentences.append("억양이 자연스럽고 전달력이 좋았습니다.")
@@ -312,7 +315,6 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     elif tone_lv == "bad":
         detail_sentences.append("억양이 다소 단조로운 편이라, 문장 끝을 더 분명하게 처리해 주면 좋습니다.")
 
-    # 속도(speed)
     speed_lv = level(speed_val)
     if speed_lv == "good":
         detail_sentences.append("말 속도가 적절해 듣기 편했습니다.")
@@ -321,10 +323,8 @@ def build_voice_payload_from_summary(fs: FeedbackSummary) -> Dict[str, Any]:
     elif speed_lv == "bad":
         detail_sentences.append("말 속도가 다소 빠르거나 느려 전달력이 떨어질 수 있습니다.")
 
-    # 문장 합치기
     summary_parts = [first_sentence]
     if detail_sentences:
-        # 너무 길어지지 않게 앞에서 2~3개 정도만 사용하고 싶으면 슬라이싱해서 줄여도 됨
         summary_parts.append(" ".join(detail_sentences))
 
     summary = " ".join(summary_parts)

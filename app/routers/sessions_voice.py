@@ -262,14 +262,14 @@ def get_voice_feedback_endpoint(
 
         # feedback_summary 테이블에 저장
         with SessionLocal() as db_write:
-            create_or_update_voice_feedback(db_write, session_id, attempt_id, voice_payload)
+            fs_saved = create_or_update_voice_feedback(db_write, session_id, attempt_id, voice_payload)
         logger.info(
             "[VOICE_FEEDBACK][GET] 100%% feedback_saved session_id=%s attempt_id=%s",
             session_id,
             attempt_id,
         )
 
-        return voice_payload
+        return build_voice_payload_from_summary(fs_saved)
     finally:
         # 임시 파일 삭제
         try:
