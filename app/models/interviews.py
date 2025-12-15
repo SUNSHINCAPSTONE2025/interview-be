@@ -1,26 +1,69 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, func
+# app/models/interview.py
+from sqlalchemy import (
+    Column,
+    BigInteger,
+    String,
+    Integer,
+    Date,
+    DateTime,
+    Text,
+    ForeignKey,
+    func,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-# ▶ user.py에서 선언한 Base를 재사용(같은 메타데이터로 테이블 생성)
-from app.models.user import Base
+from app.db.base import Base
+
 
 class Interview(Base):
-    __tablename__ = "interviews"
 
-    id = Column(Integer, primary_key=True, index=True)
-    # 필요 시 사용자별 소유를 구분하려면 주석 해제
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    __tablename__ = "content"
 
-    company = Column(String(100), nullable=False)
-    position = Column(String(100), nullable=False)
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False, index=True)
 
-    # 면접 날짜(없을 수 있음)
-    interview_date = Column(Date, nullable=True)
+    company = Column(String(20), nullable=False)
+    role = Column(String(20), nullable=False)
 
-    # 전체 연습 세션 수와 완료 수
-    total_sessions = Column(Integer, default=10, nullable=False)
-    completed_sessions = Column(Integer, default=0, nullable=False)
+    role_category = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime, server_default=func.now())
+    interview_date = Column(Date, nullable=False)
+    jd_text = Column(Text, nullable=True)
 
-    # 관계(면접 연습 세션)
-    sessions = relationship("InterviewSession", back_populates="interview", cascade="all, delete-orphan")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
+
+    # 관계
+    sessions = relationship(
+        "InterviewSession",
+        back_populates="interview",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+    resumes = relationship(
+        "Resume",
+        back_populates="interview",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class Resume(Base):
+
+    __tablename__ = "resume"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False)
+    content_id = Column(BigInteger, ForeignKey("content.id"), nullable=False)
+
+    version = Column(Integer, nullable=False)
+
+    question = Column(String(50), nullable=False)
+    answer = Column(Text, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
+
+    interview = relationship("Interview", back_populates="resumes")

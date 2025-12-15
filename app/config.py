@@ -1,14 +1,54 @@
-# 설정 모듈
-# 환경 변수에서 시크릿키/토큰만료/레이트리밋 값 등을 로드해 전역 설정으로 제공
-from pydantic import BaseSettings
+# app/config.py
+
+
+from dotenv import load_dotenv
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from shutil import which
+
+load_dotenv()  # feat#6 방식 유지: .env 파일 먼저 읽기
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # C:\interviewBE\interview-be
 
 class Settings(BaseSettings):
+    # 환경 구분
     app_env: str = "local"
+
+    # AWS
     aws_region: str | None = None
     aws_s3_bucket: str | None = None
+
+    # OpenAI
     openai_api_key: str | None = None
 
-    class Config:
-        env_file = ".env"
+    # FFMPEG 경로 (환경변수로 설정 가능, 없으면 PATH에서 자동 탐색)
+    ffmpeg_path: str | None = None
+
+    # Supabase & DB 필수 설정
+    database_url: str                        # DATABASE_URL
+    supabase_url: str                        # SUPABASE_URL
+    supabase_anon_key: str                   # SUPABASE_ANON_KEY
+    supabase_jwks_url: str | None = None     # SUPABASE_JWKS_URL
+    supabase_issuer: str | None = None       # SUPABASE_ISSUER
+    supabase_jwt_audience: str = "authenticated"  # SUPABASE_JWT_AUDIENCE
+    supabase_jwt_secret: str | None = None
+    supabase_service_role_key: str | None = None
+
+    # 🔥 pydantic-settings v2 스타일
+    model_config = SettingsConfigDict(
+        env_file=str(BASE_DIR / ".env"),  # 루트 .env 절대경로
+        env_file_encoding="utf-8",
+        extra="ignore",                   # 필요 없는 env 무시
+    )
 
 settings = Settings()
+
+# FFMPEG 경로를 환경변수 또는 시스템 PATH에서 자동으로 찾기
+FFMPEG_PATH = settings.ffmpeg_path or which("ffmpeg") or "ffmpeg"
+
+if __name__ == "__main__":
+    print("BASE_DIR:", BASE_DIR)
+    print("DATABASE_URL:", settings.database_url)
+    print("SUPABASE_URL:", settings.supabase_url)
+    print("SUPABASE_ANON_KEY 앞 10글자:", settings.supabase_anon_key[:10], "...")
+    print("FFMPEG_PATH:", FFMPEG_PATH)
