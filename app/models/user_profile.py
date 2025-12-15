@@ -1,25 +1,18 @@
-# app/models/sessions.py
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, Index, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+# app/models/user_profile.py
+# supabase auth.users를 보조하는 프로필 테이블 모델
+from sqlalchemy import Column, String, DateTime, text, Enum
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from app.db.base import Base
 
-class InterviewSession(Base):
-    __tablename__ = "sessions"
-
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False, index=True)
-    content_id = Column(BigInteger, ForeignKey("content.id"), nullable=False)
-    status = Column(String(20), nullable=False)  # draft|running|done|canceled
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    ended_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
-    session_max = Column(Integer, nullable=False)
-
-    __table_args__ = (
-        Index('ix_sessions_user_id_started_at', 'user_id', 'started_at'),
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+    id = Column(UUID(as_uuid=True), primary_key=True)  # = auth.users.id (uuid)
+    display_name = Column(String(100))
+    status = Column(
+        Enum("active", "blocked", "deleted", name="user_status", native_enum=False),
+        nullable=False,
+        server_default=text("'active'")
     )
-
-    # 관계
-    interview = relationship("Interview", back_populates="sessions")
+    profile_meta = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
