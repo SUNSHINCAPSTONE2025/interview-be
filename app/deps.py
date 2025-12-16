@@ -12,12 +12,14 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
-        db.commit()  # commit 포함
-    except:
+    except Exception:
         db.rollback()
         raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
 
 # ----------------------------
 # 현재 사용자 가져오기

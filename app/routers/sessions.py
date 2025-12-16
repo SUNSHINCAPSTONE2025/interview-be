@@ -369,7 +369,7 @@ async def upload_recording(
     # TODO: FE에서 실제 started_at, ended_at, duration_sec 받아오기
     attempt = Attempt(
         session_id=session_id,
-        session_question_id=question_index,  # TODO: 실제 session_question_id 매핑
+        session_question_id=sq.id,  # TODO: 실제 session_question_id 매핑
         started_at=datetime.utcnow(),
         ended_at=datetime.utcnow(),
         duration_sec=0,  # TODO: 실제 duration 계산
@@ -397,7 +397,7 @@ async def upload_recording(
         media_video = MediaAsset(
             session_id=session_id,
             attempt_id=attempt.id,
-            session_question_id=question_index,
+            session_question_id=sq.id,
             kind=1,  # video
             storage_url=storage_path
         )
@@ -407,7 +407,7 @@ async def upload_recording(
         media_audio = MediaAsset(
             session_id=session_id,
             attempt_id=attempt.id,
-            session_question_id=question_index,
+            session_question_id=sq.id,
             kind=3,  # audio
             storage_url=storage_path  # 동일한 WebM 파일 사용
         )
