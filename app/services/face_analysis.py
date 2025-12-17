@@ -671,7 +671,6 @@ async def run_expression_analysis_for_session(
     summary.gaze = gaze_val
     summary.eye_blink = eye_blink_val
     summary.mouth = mouth_val
-    summary.comment = res["feedback_summary"]
     # 표정 요약은 DB에 저장하지 않음 (API 응답에서만 반환)
     # comment 필드는 답변 평가(LLM)용으로만 사용
 
