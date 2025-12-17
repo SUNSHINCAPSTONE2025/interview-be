@@ -75,7 +75,7 @@ def run_pose_on_video(video_path: str):
 
     def analyze_posture(df):
         VIS_THRESHOLD = 0.5
-        k = 5
+        k = 15
         problem_frames = []
         feedback_records = []
         shoulder_bad, head_bad, hand_bad = [], [], []
